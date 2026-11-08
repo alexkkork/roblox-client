@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 import numbers
 import json
+from functools import lru_cache
 from pathlib import Path
 from movement_collision import rotation_matrix
 from physics_linear_velocity import vector as constraint_vector, scalar as constraint_scalar, unit as constraint_unit
@@ -213,6 +214,21 @@ def received_assembly_mass(snapshot, root_id=None, *, motion_members=None, allow
         o = part.get('origins', {})
         if not isinstance(p, dict) or not isinstance(o, dict):
             return None, None
+        # Values omitted from a known-complete creation keep their constructor
+        # default (e.g. Material=Plastic on avatar parts). Work on a view that
+        # carries them as received so the checks below stay unchanged.
+        defaults = {key: value for key in ('Massless', 'CustomPhysicalProperties', 'Material', 'MaterialVariant')
+                    if not _force_available(part, key, allow_authored)
+                    and (value := _constructor_default(part, key)) is not _MISSING}
+        # Size arrives under its wire name `size`; the snapshot copies it to
+        # Size as derived_received. It is the received value, not an estimate.
+        wire_size = (o.get('Size') == 'derived_received' and isinstance(p.get('size'), (list, dict))
+                     and o.get('size', 'received') == 'received' and p.get('Size') == p.get('size'))
+        if defaults or wire_size:
+            part = {**part, 'properties': {**p, **defaults},
+                    'origins': {**o, **{key: 'received' for key in defaults},
+                                **({'Size': 'received'} if wire_size else {})}}
+            p, o = part['properties'], part['origins']
         if _received(part, 'Anchored') and p.get('Anchored') is True:
             return None, None
         if not _force_available(part,'Massless',allow_authored) or type(p.get('Massless')) is not bool:
@@ -337,6 +353,39 @@ def force_impulse(force, duration):
 def _received(node, key):
     origins = node.get('origins', {}) if isinstance(node, dict) else {}
     return isinstance(origins, dict) and origins.get(key) == 'received'
+
+
+_MISSING = object()
+# The generated constructor table has no enum defaults; these classes are
+# constructed with Plastic (mirrors property_descriptor in world_bindings.cpp).
+_PLASTIC_CLASSES = frozenset(('Part','MeshPart','WedgePart','CornerWedgePart','UnionOperation','Seat','VehicleSeat'))
+
+
+@lru_cache(maxsize=1)
+def _constructor_properties():
+    path = Path(__file__).resolve().parents[1] / 'runtime/class-constructors-745.json'
+    try:
+        return json.loads(path.read_text()).get('classes', {})
+    except (OSError, ValueError):
+        return {}
+
+
+def _constructor_default(node, key):
+    """Default for a property the server omitted from a known-complete creation.
+
+    Same rule as the native runtime's completed_creation_default: only for
+    fresh, complete creation records (constructor_defaults_known), and only
+    when the property was never received or authored.
+    """
+    if (not isinstance(node, dict) or node.get('constructor_defaults_known') is not True
+            or key in node.get('properties', {})):
+        return _MISSING
+    if key == 'Material' and node.get('class_name') in _PLASTIC_CLASSES:
+        return {'$enum': {'type': 'Material', 'value': 256, 'name': 'Plastic'}}
+    descriptor = _constructor_properties().get(node.get('class_name'), {}).get('properties', {}).get(key)
+    if isinstance(descriptor, dict) and 'value' in descriptor:
+        return descriptor['value']
+    return _MISSING
 
 
 def _snapshot_vector(value):

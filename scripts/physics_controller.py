@@ -109,6 +109,22 @@ def _resolve(snapshot):
     return player_id, character_id, humanoid, root, mover, anchored, None
 
 
+
+# Option for unknown assembly mass: BodyVelocity servos whose force limits are
+# effectively unbounded (far above any character's weight) behave as a stiff
+# velocity constraint, independent of mass. Only those qualify.
+_UNBOUNDED_SERVO_FORCE = 1e5
+_STIFF_SERVO_MASS = 1e-6
+
+
+def _stiff_velocity_servos_only(velocity_sources, position_sources, linear_sources):
+    if not velocity_sources or position_sources or linear_sources:
+        return False
+    return all(source.get('gain', 0) > 0 and any(limit > 0 for limit in source['max_force'])
+               and all(limit == 0 or limit >= _UNBOUNDED_SERVO_FORCE for limit in source['max_force'])
+               for source in velocity_sources)
+
+
 class OwnCharacterPhysicsController:
     """Simulate authored movement for the snapshot's own movable character body.
 
@@ -170,6 +186,7 @@ class OwnCharacterPhysicsController:
         self.assembly_mass_source = None
         self._force_sources = ()
         self._velocity_sources = ()
+        self.stiff_servo_fallback_steps = 0  # servo solves that used the unknown-mass stiff limit
         self._position_sources = (); self._mover_feedback = []; self._reached_targets = {}; self._linear_velocity_sources = ()
         self._body_collision = {'available': False, 'initial_overlap': False, 'contacts': 0, 'limited': False}
         if geometry is not None and not isinstance(geometry, GroundGeometry):
@@ -1025,7 +1042,14 @@ class OwnCharacterPhysicsController:
         mover_curve = None
         mover_start_grounded = self.grounded
         mover_start_yaw = self.yaw
-        if (dt>0 and (self._velocity_sources or self._position_sources or self._linear_velocity_sources) and self.assembly_mass and self.controller is not None
+        mover_mass=self.assembly_mass
+        if not mover_mass and _stiff_velocity_servos_only(self._velocity_sources,self._position_sources,self._linear_velocity_sources):
+            # Mass unknown, but every BodyVelocity force limit is far above any
+            # character weight: its result is then the stiff limit (velocity
+            # reaches the target), which this tiny solver mass reproduces. It
+            # is used for this servo solve only, never stored as assembly mass.
+            mover_mass=_STIFF_SERVO_MASS;self.stiff_servo_fallback_steps+=1
+        if (dt>0 and (self._velocity_sources or self._position_sources or self._linear_velocity_sources) and mover_mass and self.controller is not None
                 and self.anchored is False and not self._health_reason):
             if self.target is not None:
                 p=self.controller.position
@@ -1037,7 +1061,7 @@ class OwnCharacterPhysicsController:
             for source in self._position_sources:
                 offset=self._mover_position_offset(source)
                 springs.append({**source,'target_position':tuple(source['target_position'][i]-offset[i] for i in range(3))})
-            servo,spring_forces=solve_movers(current,self._velocity_sources,self.assembly_mass,dt,external,
+            servo,spring_forces=solve_movers(current,self._velocity_sources,mover_mass,dt,external,
                 position=(self.controller.position[0],self.vertical_position,self.controller.position[2]),
                 position_sources=springs)
             force_acceleration=tuple(force_acceleration[i]+servo[i] for i in range(3))
@@ -1049,7 +1073,7 @@ class OwnCharacterPhysicsController:
                     axes=tuple((c*x+s*z,y,-s*x+c*z) for x,y,z in axes)
                 constraints.append({**source,'axes':axes})
             free=tuple(current[i]+(force_acceleration[i]-(self.gravity if i==1 else 0.))*dt for i in range(3))
-            projected=constraint_acceleration(free,constraints,self.assembly_mass,dt)
+            projected=constraint_acceleration(free,constraints,mover_mass,dt)
             force_acceleration=tuple(force_acceleration[i]+projected[i] for i in range(3))
             mover_curve = ((self.controller.position[0],self.vertical_position,self.controller.position[2]),
                            current,(force_acceleration[0],force_acceleration[1]-self.gravity,force_acceleration[2]))
@@ -1431,6 +1455,8 @@ class OwnCharacterPhysicsController:
             'mode': 'local_prediction', 'source': 'authored_movement_intentions',
             'server_confirmed': False, 'network_packets_sent': 0,
             'character_id': self.character_id, 'predicted_state': state,
+            'assembly_mass': self.assembly_mass, 'assembly_mass_source': self.assembly_mass_source,
+            'stiff_servo_fallback_steps': self.stiff_servo_fallback_steps,
             'received_state_modified': False, 'timestamp': timestamp,
             'simulated_seconds': self.simulated_seconds,
             'foot_offset': self.foot_offset,
