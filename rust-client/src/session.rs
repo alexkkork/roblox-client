@@ -13,6 +13,8 @@ use std::{
 
 const REQUEST_LIMIT: usize = 608 * 1024 * 1024;
 const RESPONSE_LIMIT: usize = 1024 * 1024;
+// Wall deadline for world init/update ops (see the per-op match below).
+pub const WORLD_OP_WALL_SECONDS: u64 = 30;
 
 fn frame<R: BufRead>(reader: &mut R, limit: usize) -> Result<Option<Vec<u8>>, String> {
     let mut output = Vec::new();
@@ -113,7 +115,14 @@ pub fn supervise() -> Result<(), String> {
             .and_then(|_| input.write_all(b"\n"))
             .and_then(|_| input.flush())
             .map_err(|e| e.to_string())?;
-        let response = match receiver.recv_timeout(Duration::from_secs(5)) {
+        // World init/update carry replicated state that must be applied whole;
+        // large games stream hundreds of KB at join and can exceed the short
+        // interactive deadline on a busy host. Scripts/render keep 5 seconds.
+        let deadline = match command["op"].as_str() {
+            Some("init") | Some("update") => Duration::from_secs(WORLD_OP_WALL_SECONDS),
+            _ => Duration::from_secs(5),
+        };
+        let response = match receiver.recv_timeout(deadline) {
             Ok(result) => result?,
             Err(_) => {
                 emit(

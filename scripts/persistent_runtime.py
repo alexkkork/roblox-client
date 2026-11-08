@@ -22,6 +22,9 @@ from display_state import validate_display
 from chat_protocol import delivery_error
 
 
+WORLD_OP_WAIT_SECONDS = 35  # > the supervisor's 30 s world-op deadline
+
+
 class PersistentLuauHost:
     def __init__(self, snapshot, *, memory_mb=None, text_service_factory=None):
         if memory_mb is None:
@@ -75,7 +78,9 @@ class PersistentLuauHost:
             try:
                 self.process.stdin.write(data)
                 self.process.stdin.flush()
-                result = self.responses.get(timeout=7)
+                # The Rust supervisor allows world init/update 30 s (session.rs
+                # WORLD_OP_WALL_SECONDS); wait slightly longer so it reports first.
+                result = self.responses.get(timeout=WORLD_OP_WAIT_SECONDS if command.get('op') in ('init', 'update') else 7)
                 if isinstance(result, Exception): raise result
                 if (not isinstance(result, dict) or type(result.get('ok')) is not bool
                         or not isinstance(result.get('values'), list)):
@@ -91,7 +96,7 @@ class PersistentLuauHost:
             except Exception as error:
                 # queue.Empty has an empty string. Retaining that as a runtime
                 # failure makes callers retry a dead worker and lose the cause.
-                reason = ('Persistent worker response deadline exceeded (7 seconds)'
+                reason = (f'Persistent worker response deadline exceeded ({WORLD_OP_WAIT_SECONDS if command.get("op") in ("init", "update") else 7} seconds)'
                           if isinstance(error, queue.Empty) else str(error) or type(error).__name__)
                 self.failure_reason = reason
                 self.failure_context = {
