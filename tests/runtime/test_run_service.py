@@ -96,6 +96,30 @@ heartbeat:Once(function()onceCalls+=1 end)
         host.call({'op': 'poll', 'timeout_ms': 100})
         self.assertEqual(self.execute(host, 'return calls')['values'], [stopped_at])
 
+    def test_heartbeat_is_not_starved_by_render_frames(self):
+        # Regression: RenderStepped queued events before the Heartbeat check,
+        # so with a RenderStepped connection Heartbeat never fired.
+        host = self.host()
+        self.execute(host, '''
+local r=game:GetService("RunService")
+renders=0;beats=0;steps=0;pre=0;post=0;lastTime=0;order={}
+r.RenderStepped:Connect(function(dt)assert(dt>0);renders+=1 end)
+r.Stepped:Connect(function(t,dt)assert(dt>0 and t>lastTime);lastTime=t;steps+=1;if #order<4 then table.insert(order,"Stepped") end end)
+r.PreSimulation:Connect(function(dt)assert(dt>0);pre+=1 end)
+r.PostSimulation:Connect(function(dt)assert(dt>0);post+=1 end)
+r.Heartbeat:Connect(function(dt)assert(dt>0);beats+=1;if #order<4 then table.insert(order,"Heartbeat") end end)
+''')
+        for _ in range(6):
+            time.sleep(.035)
+            poll = host.call({'op': 'poll', 'timeout_ms': 100})
+            self.assertFalse(poll.get('task_errors'), poll)
+        renders, beats, steps, pre, post, first = self.execute(
+            host, 'return renders,beats,steps,pre,post,order[1]')['values']
+        self.assertGreaterEqual(renders, 1)
+        self.assertGreaterEqual(beats, 1)
+        self.assertEqual((steps, pre, post), (beats, beats, beats))
+        self.assertEqual(first, 'Stepped')
+
     def test_oneshot_wait_uses_same_heartbeat_binding(self):
         result = local_runtime.run_source('''
 local r=game:GetService("RunService")
