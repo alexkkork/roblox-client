@@ -66,11 +66,48 @@ Json apply_engine_poses_impl(World& w,const Json& poses) {
     }
     if(!root_included)throw std::runtime_error("engine pose batch is missing its root frame");
 
+    // Rigidly joined parts the engine did not pose (accessory Handles on their
+    // AccessoryWeld, welded tools and props) move with the part they are joined
+    // to, keeping their offset; otherwise they stay where the character spawned.
+    std::unordered_map<std::string,CFrameValue> motion;
+    for(const auto& frame:frames) {
+        Node* part=find_node(w,frame["id"].get<std::string>());
+        try{motion[part->id]=pivot_product(pivot_decode(frame["cframe"]),pivot_inverse(pivot_frame(w,*part,"CFrame")));}
+        catch(const std::exception&){}
+    }
+    std::vector<EnginePoseWrite> carried;
+    try {
+        JointGraph graph(w);
+        std::deque<std::string> pending;
+        for(const auto& [id,delta]:motion)pending.push_back(id);
+        while(!pending.empty()) {
+            const std::string from=pending.front();pending.pop_front();
+            const CFrameValue delta=motion.at(from);
+            for(auto index:graph.incident[from]) {
+                const auto& edge=graph.edges[index];
+                if(!edge.rigid||!edge.active||!edge.unknown.empty()||!edge.a||!edge.b)continue;
+                Node* other=edge.a->id==from?edge.b:edge.a;
+                if(!other||other->destroyed||seen.count(other->id)||motion.count(other->id)||!pivot_part(w,*other))continue;
+                CFrameValue old;
+                try{old=pivot_frame(w,*other,"CFrame");}catch(const std::exception&){continue;}
+                motion[other->id]=delta;pending.push_back(other->id);
+                EnginePoseWrite write;write.node=other;
+                write.before=previous_part_transform(w,*other);
+                write.after=part_fields_from_frame(pivot_encode(pivot_product(delta,old)));
+                carried.push_back(std::move(write));
+            }
+        }
+    }catch(const std::exception& error) {
+        if(w.joint_pose_errors.size()<128)w.joint_pose_errors.push_back(Json{{"operation","engine_pose_carry"},{"error",error.what()}});
+        carried.clear();
+    }
+    for(auto& write:carried)writes.push_back(std::move(write));
+
     // Validation and derivation are complete before any visible property changes.
     for(const auto& write:writes)
         for(auto it=write.after.begin();it!=write.after.end();++it)
             w.local_properties[write.node->id][it.key()]=it.value();
     for(const auto& write:writes)
         part_transform_events(w,*write.node,write.before,write.after);
-    return Json{{"status","applied"},{"frames_applied",writes.size()}};
+    return Json{{"status","applied"},{"frames_applied",writes.size()-carried.size()},{"frames_carried",carried.size()}};
 }
