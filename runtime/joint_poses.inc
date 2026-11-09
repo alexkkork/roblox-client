@@ -249,3 +249,35 @@ void flush_joint_poses(World& w,std::unordered_set<std::string> pending,const st
     }
 }
 void flush_motor_transforms(World& w){flush_joint_poses(w,{},{});}
+// Physics replication for other players' characters (and other remote
+// assemblies) carries only the assembly root's CFrame. Like joint_part_write
+// does for local writes, move rigidly joined members with the root's delta,
+// keeping their last solved offsets, unless the same batch gave them their own
+// received CFrame. Without this, remote bodies stay where they were created.
+void carry_received_assemblies(World& w,const std::unordered_map<std::string,CFrameValue>& before,
+                               const std::unordered_set<std::string>& received,uint64_t sequence) {
+    if(before.empty())return;
+    try {
+        JointGraph graph(w);PoseChanges changes;std::unordered_set<std::string> claimed;
+        for(const auto& id:w.order) {
+            auto previous=before.find(id);if(previous==before.end())continue;
+            Node* root=find_node(w,id);if(!root||root->destroyed)continue;
+            // Only an assembly root's pose carries the assembly. A received
+            // pose on any other member is authoritative for that part alone.
+            if(assembly_root(w,*root,graph)!=root)continue;
+            CFrameValue now;
+            try{now=pivot_frame(w,*root,"CFrame");}catch(const std::exception&){continue;}
+            if(pivot_encode(now)==pivot_encode(previous->second))continue;
+            auto delta=pivot_product(now,pivot_inverse(previous->second));
+            for(auto* member:graph.connected(*root,true)) {
+                if(received.count(member->id)||!claimed.insert(member->id).second)continue;
+                CFrameValue old;
+                try{old=pivot_frame(w,*member,"CFrame");}catch(const std::exception&){continue;}
+                changes.emplace_back(member,part_fields_from_frame(pivot_encode(pivot_product(delta,old))));
+            }
+        }
+        if(!changes.empty())commit_received_joint_poses(w,changes,sequence);
+    }catch(const std::exception& error) {
+        if(w.joint_pose_errors.size()<128)w.joint_pose_errors.push_back(Json{{"operation","received_assembly_carry"},{"error",error.what()}});
+    }
+}
