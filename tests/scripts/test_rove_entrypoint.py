@@ -56,6 +56,22 @@ class RoveEntrypointTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '--help'):
             rove.launch_command(['typo'], self.root, 'win32')
 
+    def test_content_works_without_virtualenv(self):
+        (self.root / '.venv/bin/python').unlink()
+        command = rove.launch_command(['content', '--dest', '/tmp/x'], self.root, 'linux')
+        self.assertEqual(command[0], sys.executable)
+        self.assertEqual(Path(command[1]).name, 'download_content.py')
+        self.assertEqual(command[-2:], ['--dest', '/tmp/x'])
+
+    def test_fresh_clone_gets_output_folders(self):
+        # Regression: outputs/ is git-ignored, so Play failed with FileNotFoundError.
+        rove.prepare_local_folders(self.root)
+        rove.prepare_local_folders(self.root)  # idempotent
+        for name in ('outputs', 'outputs/logs', 'outputs/gamejoin'):
+            self.assertTrue((self.root / name).is_dir(), name)
+        if sys.platform != 'win32':
+            self.assertEqual((self.root / 'outputs').stat().st_mode & 0o777, 0o700)
+
     def test_help_does_not_require_account_or_dependencies(self):
         result = subprocess.run([sys.executable, str(ROOT / 'rove.py'), '--help'],
                                 cwd=self.root, capture_output=True, text=True, timeout=10)

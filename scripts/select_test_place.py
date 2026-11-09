@@ -45,7 +45,7 @@ def main():
     if selected["is_playable"] is not True:
         selected["blocked_reason"] = place.get("reasonProhibited", "unknown")
     out = ROOT / "outputs/gamejoin"
-    out.mkdir(exist_ok=True)
+    out.mkdir(parents=True, exist_ok=True)
     current = out / 'target-selection.json'
     if current.exists():
         previous = json.loads(current.read_text())

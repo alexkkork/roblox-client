@@ -40,6 +40,7 @@ def main():
     finally:
         if connection is not None:
             connection.close()
+    (root / "outputs").mkdir(exist_ok=True)
     (root / "outputs/session-check.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
     return 0 if result["authenticated"] else 1

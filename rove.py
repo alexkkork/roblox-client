@@ -13,6 +13,7 @@ HELP = """Rove — setup, check, run
 
   python rove.py setup [--jobs 2] [--native-prefix PATH] [--with-ui]
   python rove.py check
+  python rove.py content          (built-in meshes/textures for the renderer on Windows/Linux)
   python rove.py terminal [--place ID_OR_INVITE]
   python rove.py ui [--port PORT]
 
@@ -31,9 +32,12 @@ def launch_command(arguments, root=ROOT, platform=sys.platform):
     action = arguments.pop(0) if arguments and not arguments[0].startswith('-') else default
     if '--no-web' in arguments and action == default:
         action = 'terminal'
-    if action not in ('setup', 'check', 'terminal', 'ui'):
+    if action not in ('setup', 'check', 'terminal', 'ui', 'content'):
         raise ValueError(f'Unknown command: {action}. Run python rove.py --help.')
     windows = platform == 'win32'
+    if action == 'content':
+        # Standard library only, so it also works before setup.
+        return [sys.executable, str(root / 'scripts' / 'download_content.py'), *arguments]
     if action == 'setup':
         script = 'setup_windows.py' if windows else 'setup_terminal.py'
         if platform == 'darwin' and '--with-ui' not in arguments:
@@ -51,6 +55,21 @@ def launch_command(arguments, root=ROOT, platform=sys.platform):
     return [str(python), str(root / 'scripts' / script), *arguments]
 
 
+def prepare_local_folders(root=ROOT):
+    """Create the git-ignored output folders a fresh clone lacks.
+
+    Session tools write reports into outputs/ subfolders and would otherwise fail
+    with FileNotFoundError on the first Play. Owner-only on POSIX like secrets/.
+    """
+    outputs = Path(root) / 'outputs'
+    for folder in (outputs, outputs / 'logs', outputs / 'gamejoin'):
+        if folder.is_symlink():
+            raise ValueError(f'{folder} must not be a link.')
+        folder.mkdir(exist_ok=True)
+    if os.name != 'nt':
+        outputs.chmod(0o700)
+
+
 def main(argv=None):
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments in (['-h'], ['--help'], ['help']):
@@ -61,7 +80,8 @@ def main(argv=None):
         return 1
     try:
         command = launch_command(arguments)
-        env = os.environ.copy() if arguments[:1] == ['setup'] else runtime_environment(ROOT)
+        prepare_local_folders()
+        env =os.environ.copy() if arguments[:1] == ['setup'] else runtime_environment(ROOT)
         env['PYTHONUTF8'] = '1'
         child = subprocess.Popen(command, cwd=ROOT, env=env)
         try:

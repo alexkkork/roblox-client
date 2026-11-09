@@ -34,9 +34,21 @@ def connect_account(root, value, *, session_factory=RobloxSession):
     # current account file. No endpoint returns the stored credential.
     reply=candidate.request('users.roblox.com','/v1/users/authenticated')
     data=reply.get('data')
-    if (reply.get('http_status')!=200 or reply.get('challenge_present') or
-            not isinstance(data,dict) or type(data.get('id')) is not int or data['id']<=0):
-        raise SessionError('This account session could not be verified. Check it and try again.')
+    # Say which check failed (never echo the value): a truncated paste, a
+    # signed-out cookie and an account challenge need different fixes.
+    length=len(candidate._cookie)
+    hint=(f' The pasted value is {length} characters; complete sessions are usually over 500, '
+          'so it may have been cut off while copying.' if length<500 else '')
+    if reply.get('challenge_present'):
+        raise SessionError('Roblox asked this account for an extra verification step. '
+                           'Sign in once in a browser on this network, then copy the session again.')
+    if reply.get('http_status')==401:
+        raise SessionError('Roblox rejected this account session (signed out or expired). '
+                           'Sign in again and copy a fresh session.'+hint)
+    if (reply.get('http_status')!=200 or not isinstance(data,dict)
+            or type(data.get('id')) is not int or data['id']<=0):
+        raise SessionError(f"This account session could not be verified (HTTP {reply.get('http_status')}). "
+                           'Check it and try again.'+hint)
     directory=root/'secrets'; directory.mkdir(exist_ok=True); protect_private(directory)
     # Never switch the account underneath a running game or another writer.
     with acquire_session_lease(root):

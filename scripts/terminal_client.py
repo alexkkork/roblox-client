@@ -92,7 +92,15 @@ def prepare_target(target):
             error = json.loads(result.stdout)
         except ValueError:
             error = {}
-        raise SessionError(error.get('error', 'Target selection failed. Check account access and the place ID or invite.'))
+        if not isinstance(error, dict):
+            error = {}
+        if error.get('error'):
+            raise SessionError(error['error'])
+        # A local crash (e.g. a missing folder) is not an account or place problem.
+        if isinstance(error.get('error_type'), str) and error['error_type'].isidentifier():
+            raise SessionError(f"Target selection crashed locally ({error['error_type']}). "
+                               'See outputs/logs, or run the selector directly for details.')
+        raise SessionError('Target selection failed. Check account access and the place ID or invite.')
     selected = json.loads((ROOT / 'outputs/gamejoin/target-selection.json').read_text())
     if not selected.get('is_playable'):
         raise SessionError('This account cannot play the selected place.')

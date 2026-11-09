@@ -504,6 +504,7 @@ window.addEventListener("rove:workspace", () => {
     $('camera').addEventListener('change',()=>renderer.setMode($('camera').value));
     $('players-toggle').onclick=()=>{$('players').hidden=!$('players').hidden;};
     $('details-toggle').onclick=()=>{$('details').hidden=!$('details').hidden;};
+    $('details-close').onclick=()=>{$('details').hidden=true;};
     $('fullscreen').onclick=()=>{if(document.fullscreenElement)void document.exitFullscreen();else void $('surface').requestFullscreen?.();};
     $('leave').onclick=()=>{$('leave-dialog').showModal();resetMovement();};$('cancel-leave').onclick=()=>$('leave-dialog').close();
     $('confirm-leave').onclick=async()=>{const button=$('confirm-leave');button.disabled=true;try{await post('/api/runtime/leave',{});connected=false;controls.setConnected(false);$('leave-dialog').close();$('waiting').hidden=false;$('waiting-text').textContent='Session ended. You can join another game from the launcher.';}catch(error){$('action-state').textContent=error.message;$('leave-dialog').close();$('details').hidden=false;}finally{button.disabled=false;}};

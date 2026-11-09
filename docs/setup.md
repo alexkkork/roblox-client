@@ -40,7 +40,13 @@ sudo apt-get update
 sudo apt-get install -y python3 python3-venv python3-dev cmake g++ pkg-config libssl-dev libzstd-dev
 ```
 
-install [Rust](https://rustup.rs/) then run `python3 rove.py setup`
+for the browser UI also install `nodejs npm` (needed by `--with-ui`)
+
+install [Rust](https://rustup.rs/) then run `python3 rove.py setup` or `python3 rove.py setup --with-ui`
+
+## built-in content
+
+the renderer reads built-in `rbxasset://` meshes textures and fonts from the Roblox app on Mac. on Windows and Linux run `rove.py content` once it downloads the public content packages for the current Roblox version from Roblox's CDN checks each one against the CDN manifest and unpacks them into `roblox-content/` which the renderer then uses. no account is needed. to use another folder set `ROBLOX_CONTENT_DIR` to its `content` directory
 
 ## join
 
@@ -54,6 +60,7 @@ use the same Python command from above before each one
 
 - `rove.py setup` build or update safe to rerun if interrupted
 - `rove.py check` offline checks no account needed
+- `rove.py content` download built-in content for the renderer on Windows and Linux
 - `rove.py terminal` terminal only
 - `rove.py --help` more options
 

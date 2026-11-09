@@ -103,6 +103,7 @@ def main(*, target=None):
         if private: saved['private_server_invite_id'] = invite['privateServerId']
         write_private(ROOT / "secrets/last-join.json", saved)
         report["private_reply_saved"] = True
+    (ROOT / "outputs/gamejoin").mkdir(parents=True, exist_ok=True)
     (ROOT / "outputs/gamejoin/allocation-check.json").write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
     return 0 if ready else 2

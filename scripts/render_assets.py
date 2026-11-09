@@ -21,6 +21,15 @@ from mesh_asset_decoder import MAX_INPUT, MeshAssetError, _VECTOR, decode_fileme
 from render_fonts import RenderFonts
 
 
+MAC_CONTENT_DIR = Path('/Applications/Roblox.app/Contents/Resources/content')
+DOWNLOADED_CONTENT_DIR = Path(__file__).resolve().parent.parent / 'roblox-content' / 'content'
+
+
+def default_content_dir():
+    """Prefer `rove.py content` downloads; fall back to the installed macOS app."""
+    return DOWNLOADED_CONTENT_DIR if DOWNLOADED_CONTENT_DIR.is_dir() else MAC_CONTENT_DIR
+
+
 def asset_reference(value):
     if not isinstance(value, str) or len(value) > 512:
         raise ValueError('Invalid visual asset reference')
@@ -40,7 +49,7 @@ def asset_reference(value):
 
 def fetch_visual_asset(reference, *, max_bytes=MAX_INPUT):
     if reference.startswith('rbxasset://'):
-        root = Path(os.environ.get('ROBLOX_CONTENT_DIR', '/Applications/Roblox.app/Contents/Resources/content')).expanduser().resolve()
+        root = Path(os.environ.get('ROBLOX_CONTENT_DIR') or default_content_dir()).expanduser().resolve()
         target = (root / reference.removeprefix('rbxasset://')).resolve()
         if not target.is_relative_to(root) or not target.is_file() or not 0 < target.stat().st_size <= max_bytes:
             raise ValueError('Installed Roblox visual asset is unavailable')
