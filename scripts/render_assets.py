@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from mesh_asset_decoder import MAX_INPUT, MeshAssetError, _VECTOR, decode_filemesh, fetch_mesh_asset
+from draco_mesh import DracoError, decode_chunked
 from render_fonts import RenderFonts
 
 
@@ -60,6 +61,7 @@ def decode_render_mesh(raw):
     version, newline, body = data.partition(b'\n')
     if not newline:
         raise ValueError('Missing mesh header')
+    version = version.rstrip(b'\r')  # many legacy text meshes use CRLF line endings
     positions, normals, uv, indices = [], [], [], []
     bones = 0
     if version in (b'version 1.00', b'version 1.01'):
@@ -73,6 +75,18 @@ def decode_render_mesh(raw):
             u, v, _ = (float(n) for n in vectors[i+2])
             uv.extend((u, 1-v if version == b'version 1.00' else v))
         indices = [i for face in mesh.triangles for i in face]
+    elif version in (b'version 6.00', b'version 7.00'):
+        # Chunked meshes; modern avatar items (hair, accessories) are 7.00 with Draco geometry.
+        try:
+            positions, normals, uv, indices = decode_chunked(body)
+        except DracoError as error:
+            raise ValueError(f'Invalid {version.decode()} mesh: {error}') from None
+        vertices = len(positions) // 3
+        if not 0 < vertices <= 100000 or not 0 < len(indices) // 3 <= 200000:
+            raise ValueError('Visual mesh geometry budget exceeded')
+        if len(normals) != len(positions) or len(uv) != vertices * 2 or any(i >= vertices for i in indices):
+            raise ValueError('Inconsistent visual mesh')
+        bones = 1 if b'SKINNING' in body else 0
     else:
         lods, tail = 0, 0
         if version == b'version 2.00' and len(body) >= 12:
@@ -106,8 +120,11 @@ def decode_render_mesh(raw):
             offsets = struct.unpack_from('<' + 'I'*lods, body, lod_start)
             if offsets[0] != 0 or any(a > b for a, b in zip(offsets, offsets[1:])) or offsets[-1] > faces:
                 raise ValueError('Invalid mesh LOD range')
-            if lods > 1:
-                end = offsets[1]
+            # Draw the first non-empty level; a table of empty levels (dynamic
+            # heads store 0, 0) means one level of every face.
+            levels = [(a, b) for a, b in zip(offsets, offsets[1:]) if a < b]
+            if levels:
+                start, end = levels[0]
         for i in range(vertices):
             values = struct.unpack_from('<8f', body, header+i*stride)
             positions.extend(values[:3]); normals.extend(values[3:6]); uv.extend(values[6:8])
