@@ -44,6 +44,37 @@ class EnginePoseTests(unittest.TestCase):
             'frames': [{'id': node_id, 'cframe': cf} for node_id, cf in frames],
         }}
 
+    def test_welded_accessory_follows_its_posed_part(self):
+        snapshot = copy.deepcopy(self.snapshot)
+        snapshot['class_parents'].update({'Weld': 'JointInstance', 'JointInstance': 'Instance',
+                                          'Accessory': 'Accoutrement', 'Accoutrement': 'Instance'})
+        snapshot['nodes'] += [
+            {'id': 'scope:hat-1', 'class_name': 'Accessory', 'name': 'Hat', 'parent': 'scope:character-1', 'properties': {}},
+            {'id': 'scope:handle-1', 'class_name': 'Part', 'name': 'Handle', 'parent': 'scope:hat-1',
+             'properties': {'CFrame': pose((1, 6, 3)), 'Anchored': False}},
+            {'id': 'scope:weld-1', 'class_name': 'Weld', 'name': 'AccessoryWeld', 'parent': 'scope:handle-1',
+             'properties': {'Part0': {'$ref': 'scope:handle-1'}, 'Part1': {'$ref': 'scope:torso-1'},
+                            'C0': pose((0, -2, 0)), 'C1': pose((0, 0, 0)), 'Enabled': True}},
+        ]
+        host_path = Path(os.environ.get('ENGINE_POSE_PERSISTENT_HOST',
+                                       os.environ.get('CFRAME_PERSISTENT_HOST',
+                                                      str(ROOT / 'rust-client/target/release/headless-luau'))))
+        with mock.patch.object(persistent_runtime, 'RUST_HOST', host_path):
+            host = persistent_runtime.PersistentLuauHost(snapshot)
+        self.addCleanup(host.close)
+        # The torso moves by (+6, +4, +6); the welded Handle keeps its offset.
+        result = host.call({'op': 'update', 'delta': self.delta(
+            ('scope:root-1', pose((4, 5, 6))), ('scope:torso-1', pose((7, 8, 9)))), 'timeout_ms': 100})
+        self.assertTrue(result['ok'], result)
+        self.assertEqual(result['engine_pose_frames_applied'], 2)
+        self.assertEqual(result['engine_pose_frames_carried'], 1)
+        moved = host.call({'op': 'execute', 'timeout_ms': 1000, 'source': '''
+local h=game:GetService("Players").LocalPlayer.Character.Hat.Handle
+return h.Position.X,h.Position.Y,h.Position.Z
+'''})
+        self.assertTrue(moved['ok'], moved)
+        self.assertEqual(moved['values'], [7, 10, 9])
+
     def test_batch_is_visible_before_pose_property_callbacks_and_stays_local(self):
         self.execute('''
 getgenv().root=game:GetService("Players").LocalPlayer.Character.HumanoidRootPart
