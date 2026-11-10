@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from mesh_asset_decoder import MAX_INPUT, MeshAssetError, _VECTOR, decode_filemesh, fetch_mesh_asset
+from draco_mesh import DracoError, decode_chunked
 from render_fonts import RenderFonts
 
 
@@ -73,6 +74,18 @@ def decode_render_mesh(raw):
             u, v, _ = (float(n) for n in vectors[i+2])
             uv.extend((u, 1-v if version == b'version 1.00' else v))
         indices = [i for face in mesh.triangles for i in face]
+    elif version in (b'version 6.00', b'version 7.00'):
+        # Chunked meshes; modern avatar items (hair, accessories) are 7.00 with Draco geometry.
+        try:
+            positions, normals, uv, indices = decode_chunked(body)
+        except DracoError as error:
+            raise ValueError(f'Invalid {version.decode()} mesh: {error}') from None
+        vertices = len(positions) // 3
+        if not 0 < vertices <= 100000 or not 0 < len(indices) // 3 <= 200000:
+            raise ValueError('Visual mesh geometry budget exceeded')
+        if len(normals) != len(positions) or len(uv) != vertices * 2 or any(i >= vertices for i in indices):
+            raise ValueError('Inconsistent visual mesh')
+        bones = 1 if b'SKINNING' in body else 0
     else:
         lods, tail = 0, 0
         if version == b'version 2.00' and len(body) >= 12:
