@@ -21,16 +21,21 @@ class MovingPlatformTests(unittest.TestCase):
                 'ReplicationPV': {'position': [4, 5, 6], 'rotation': 1,
                                   'position_present': True}}},
             43: {'class': 0, 'properties': {'Anchored': False,
-                'CFrame': {'position': [7, 8, 9], 'rotation': 5}}},
+                'CFrame': {'position': [7, 8, 9], 'rotation': 0}}},
             44: {'class': 0, 'properties': {'CFrame': {'position': [0, 0, 0],
                                                        'rotation': identity}}},
             45: {'class': 0, 'properties': {'Anchored': False}},
+            46: {'class': 0, 'properties': {'Anchored': True,
+                'CFrame': {'position': [7, 8, 9], 'rotation': 5}}},
         }, property_versions={})
         poses = platform_poses_from_world(world)
-        self.assertEqual(set(poses), {41, 42})
+        self.assertEqual(set(poses), {41, 42, 46})
         self.assertEqual(poses[41].position, (1., 2., 3.))
         self.assertEqual(poses[42].position, (4., 5., 6.))
-        self.assertNotIn(43, poses)  # opaque transform selector is not guessed.
+        # Selector 0 without its six quaternion bytes is opaque and not guessed;
+        # selector 5 expands through the pinned native axis-pair table (+X, -Y).
+        self.assertNotIn(43, poses)
+        self.assertEqual(poses[46].position, (7., 8., 9.))
 
     def test_world_pose_map_uses_newest_received_frame(self):
         schema = {'classes': [{'name': 'Part', 'properties': [0]}],

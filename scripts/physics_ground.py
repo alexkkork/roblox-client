@@ -3,10 +3,14 @@
 The default mode accepts received Block shape and collision properties, plus
 the established strict constructor-default rule. An explicit experimental
 option may infer omitted Part defaults for fresh complete network creations;
-every inferred default is recorded on its collider. Complete rigid rotation
-matrices support oriented blocks. Explicit decoded triangle meshes and voxel
-occupancy may be supplied as collision geometry; opaque Terrain/MeshPart assets
-remain unsupported (their bounds are never substituted for collision shape).
+every inferred default is recorded on its collider. Oriented blocks come from
+complete rigid rotation matrices, from the pinned native reader's axis-pair
+selectors (property CFrame types 27/51 and ReplicationPV type 57), and from its
+six-byte packed quaternion form; these are the same decoders the snapshot,
+animation and owned-part code already use for received poses. Explicit decoded
+triangle meshes and voxel occupancy may be supplied as collision geometry;
+opaque Terrain/MeshPart assets remain unsupported (their bounds are never
+substituted for collision shape).
 """
 from __future__ import annotations
 
@@ -18,7 +22,9 @@ from pathlib import Path
 from typing import Any
 
 from movement_collision import ray_aabb, ray_obb, rotation_matrix
-from physics_rotation import RotationField, rotation_is_identity
+from physics_rotation import (RotationCodecError, RotationField, decode_native_quaternion,
+                              native_compact_selector_to_matrix,
+                              native_property_selector_to_matrix, rotation_is_identity)
 
 Vector3 = tuple[float, float, float]
 _ROOT = Path(__file__).resolve().parents[1]
@@ -242,8 +248,54 @@ def _vector9(value):
     return tuple(result)
 
 
+def _quaternion_matrix(q):
+    """Row-major basis for a unit quaternion in the decoder's (x, y, z, w) order."""
+    x, y, z, w = q
+    return (1-2*(y*y+z*z), 2*(x*y-z*w), 2*(x*z+y*w),
+            2*(x*y+z*w), 1-2*(x*x+z*z), 2*(y*z-x*w),
+            2*(x*z-y*w), 2*(y*z+x*w), 1-2*(x*x+y*y))
+
+
+def _native_wire_rotation(cframe, record_type):
+    """Expand a received selector or packed quaternion through the pinned native readers.
+
+    Type 27/51 property CFrames carry an axis-pair selector (1..36, expanded as
+    ``selector - 1``) or, for selector 0, a six-byte quaternion. Type 57
+    ReplicationPV carries a compact selector (1..24) or the same quaternion
+    bytes. Anything else (unknown selector, seven-float type-57 branch, bad
+    bytes) stays opaque and returns None.
+    """
+    rotation = cframe.get('rotation')
+    try:
+        if record_type in (27, 51):
+            if type(rotation) is int and 1 <= rotation <= 36:
+                return native_property_selector_to_matrix(rotation)
+            packed = cframe.get('packed_rotation') if record_type == 27 else rotation
+            if (record_type == 51 or rotation == 0) and isinstance(packed, str):
+                raw = bytes.fromhex(packed)
+                if len(raw) != 6:
+                    return None
+                return _quaternion_matrix(decode_native_quaternion(raw)[0])
+        elif record_type == 57:
+            if type(rotation) is int and 1 <= rotation <= 24:
+                return native_compact_selector_to_matrix(rotation)
+            if isinstance(rotation, str):
+                raw = bytes.fromhex(rotation)
+                if len(raw) != 6:
+                    return None
+                return _quaternion_matrix(decode_native_quaternion(raw)[0])
+    except (RotationCodecError, ValueError, TypeError):
+        return None
+    return None
+
+
 def _received_rotation(cframe, record_type):
-    """Use complete matrices or the already-established identity selectors."""
+    """Return a validated row-major rotation from the received frame, or None.
+
+    Accepts complete matrices, the established identity selectors, the native
+    axis-pair selectors and the native packed quaternion. Every result passes
+    ``rotation_matrix`` so only orthonormal, right-handed bases become colliders.
+    """
     rotation = cframe.get('rotation')
     if isinstance(rotation,(tuple,list)):
         if len(rotation) == 3 and all(isinstance(row,(tuple,list)) and len(row) == 3 for row in rotation):
@@ -251,7 +303,13 @@ def _received_rotation(cframe, record_type):
         try:return rotation_matrix(rotation)
         except ValueError:return None
     if _identity_rotation(cframe,record_type):return (1.,0.,0.,0.,1.,0.,0.,0.,1.)
-    return None
+    expanded = _native_wire_rotation(cframe, record_type)
+    if expanded is None:
+        return None
+    try:
+        return rotation_matrix(expanded)
+    except ValueError:
+        return None
 
 
 def _property_type_map(schema: dict, class_index: int) -> dict[str, tuple[int, int | None]]:
@@ -354,8 +412,11 @@ def _received_part_frame(world: object, key: Any, props: dict,
             continue
         normalized = frame
         if value_type == 27 and 'rotation_id' in frame:
+            # Keep the selector-zero quaternion bytes; they are the only
+            # rotation evidence for parts with arbitrary orientation.
             normalized = {'position': frame.get('position'),
-                          'rotation': frame.get('rotation_id')}
+                          'rotation': frame.get('rotation_id'),
+                          'packed_rotation': frame.get('packed_rotation')}
         candidates.append((versions.get(name, 0), name == 'CFrame', normalized, value_type))
     if not candidates:
         return None, None
@@ -370,7 +431,8 @@ def extract_ground(world: object, *, allow_network_constructor_defaults: bool = 
     """Extract supported static block colliders from a received ``World`` object.
 
     Only explicitly anchored, collidable Block ``Part`` objects with a
-    schema-typed Vector3 size and a complete rigid rotation are included.
+    schema-typed Vector3 size and a decodable rigid rotation (full matrix,
+    native axis-pair selector or native packed quaternion) are included.
     ``allow_network_constructor_defaults`` enables an experimental inference
     for missing Part ``CanCollide``/Block shape on fresh complete creations;
     inferred fields are listed on each collider's ``assumptions`` tuple. The flag

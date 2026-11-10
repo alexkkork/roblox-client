@@ -297,6 +297,9 @@ class LiveCharacterPhysics:
             'foot_offset_origin': controller.get('foot_offset_origin'),
             'ground_collider_count': local_prediction.get('ground_collider_count', 0),
             'geometry_assumptions': local_prediction.get('geometry_assumptions', []),
+            'unsupported_geometry_count': local_prediction.get('unsupported_geometry_count', 0),
+            'unsupported_geometry_reasons': local_prediction.get('unsupported_geometry_reasons', {}),
+            'body_collision': controller.get('body_collision'),
         }
         if not (_finite_vector(predicted_position) and _finite_vector(linear_velocity)
                 and _finite_vector(angular_velocity)):

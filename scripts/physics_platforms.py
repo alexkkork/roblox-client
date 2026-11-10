@@ -41,7 +41,8 @@ def platform_poses_from_world(world) -> dict:
 
     Both anchored and explicitly unanchored Part descendants are eligible.
     The helper only reads CFrame/ReplicationPV properties with supported schema
-    tags and a complete rigid rotation; opaque rotations and missing/unknown
+    tags and a decodable rigid rotation (full matrix, native axis-pair selector
+    or native packed quaternion); opaque rotations and missing/unknown
     Anchored state are omitted. It never estimates a frame from velocity,
     geometry bounds, local history, or constructor defaults. Keys are the
     original ``world.instances`` keys used by received colliders' ``source``.

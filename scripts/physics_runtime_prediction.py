@@ -11,7 +11,7 @@ from physics_platforms import platform_poses_from_world
 from world_snapshot import _node_snapshot, instance_id
 from types import SimpleNamespace
 from mesh_asset_decoder import MeshAssetQueue, visual_meshes_from_world
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 import copy
 import weakref
 
@@ -839,4 +839,6 @@ class RuntimePhysicsPrediction:
                 'geometry_assumptions': sorted({item for box in self._geometry.colliders
                                                 for item in box.assumptions}) if self._geometry else [],
                 'unsupported_geometry_count': len(self._geometry.unsupported) if self._geometry else 0,
+                'unsupported_geometry_reasons': dict(sorted(Counter(
+                    reason for _, reason in self._geometry.unsupported).items())) if self._geometry else {},
                 'visual_mesh_approximation': mesh_status}

@@ -1,3 +1,4 @@
+import math
 import unittest
 from types import SimpleNamespace
 
@@ -50,12 +51,85 @@ class GroundExtractionTests(unittest.TestCase):
         self.assertEqual(len(extract_ground(world).colliders), 1)
 
     def test_type27_other_selectors_do_not_create_identity_boxes(self):
+        # Selector 1 expands code 0 (+X, +X): not an orthogonal axis pair, so
+        # the native expander rejects it and no box may be assumed.
         world = make_world({1: part(CanCollide=True, Anchored=True,
                                     CFrame={'position': [0, 0, 0], 'rotation_id': 1},
                                     Size=[20, 2, 20])})
         geometry = extract_ground(world)
         self.assertEqual(geometry.colliders, ())
         self.assertIn('rotation', dict(geometry.unsupported)[1])
+
+    def test_type27_axis_pair_selector_creates_oriented_box(self):
+        # Selector 14 expands code 13: first axis +Z, second +Y, so local X
+        # points along world Z (a 90 degree yaw), matching the native reader.
+        world = make_world({1: part(CanCollide=True, Anchored=True,
+                                    CFrame={'position': [0, 0, 0], 'rotation_id': 14,
+                                            'packed_rotation': None},
+                                    Size=[20, 2, 4])})
+        geometry = extract_ground(world)
+        self.assertEqual(len(geometry.colliders), 1)
+        box = geometry.colliders[0]
+        self.assertEqual(box.assumptions, ())
+        for actual, expected in zip(box.minimum + box.maximum, (-2., -1., -10., 2., 1., 10.)):
+            self.assertAlmostEqual(actual, expected, places=6)
+        self.assertIsNotNone(ground_raycast((0., 1.2, 9.5), geometry, foot_offset=0., max_distance=.5))
+        self.assertIsNone(ground_raycast((9.5, 1.2, 0.), geometry, foot_offset=0., max_distance=.5))
+
+    def test_type27_packed_quaternion_creates_oriented_box(self):
+        from physics_rotation import encode_native_quaternion
+        # 45 degree yaw about +Y as (x, y, z, w); only its diagonal footprint
+        # can tell a decoded rotation from an assumed identity.
+        half = math.sqrt(.5)
+        packed = encode_native_quaternion((0., math.sin(math.pi/8), 0., math.cos(math.pi/8))).hex()
+        world = make_world({1: part(CanCollide=True, Anchored=True,
+                                    CFrame={'position': [0, 0, 0], 'rotation_id': 0,
+                                            'packed_rotation': packed},
+                                    Size=[20, 2, 2])})
+        geometry = extract_ground(world)
+        self.assertEqual(len(geometry.colliders), 1)
+        box = geometry.colliders[0]
+        self.assertAlmostEqual(box.maximum[0], 11*half, places=2)
+        self.assertAlmostEqual(box.maximum[2], 11*half, places=2)
+        self.assertIsNotNone(ground_raycast((6., 1.2, -6.), geometry, foot_offset=0., max_distance=.5))
+        self.assertIsNone(ground_raycast((6., 1.2, 6.), geometry, foot_offset=0., max_distance=.5))
+        bad = make_world({1: part(CanCollide=True, Anchored=True,
+                                  CFrame={'position': [0, 0, 0], 'rotation_id': 0,
+                                          'packed_rotation': 'abcd'},
+                                  Size=[20, 2, 2])})
+        self.assertEqual(extract_ground(bad).colliders, ())
+
+    def test_type51_and_type57_selectors_and_quaternions_create_oriented_boxes(self):
+        from physics_rotation import encode_native_quaternion
+        packed = encode_native_quaternion((0., math.sin(math.pi/8), 0., math.cos(math.pi/8))).hex()
+        selector51 = make_world({1: part(CanCollide=True, Anchored=True,
+                                         CFrame={'position': [0, 0, 0], 'rotation': 14},
+                                         Size=[20, 2, 4])}, cframe_type=51)
+        quaternion51 = make_world({1: part(CanCollide=True, Anchored=True,
+                                           CFrame={'position': [0, 0, 0], 'rotation': packed},
+                                           Size=[20, 2, 2])}, cframe_type=51)
+        box = extract_ground(selector51).colliders[0]
+        self.assertAlmostEqual(box.maximum[2], 10., places=6)
+        self.assertAlmostEqual(box.maximum[0], 2., places=6)
+        box = extract_ground(quaternion51).colliders[0]
+        self.assertAlmostEqual(box.maximum[0], 11*math.sqrt(.5), places=2)
+        # Type 57 compact selectors use the separate physics table; selector 1
+        # is identity there and 2 is a different axis pair (+X, +Z).
+        for selector, expected_z in ((1, 2.), (2, 1.)):
+            instance = part(CanCollide=True, Anchored=True,
+                            ReplicationPV={'position': [0, 0, 0], 'rotation': selector,
+                                           'position_present': True},
+                            Size=[20, 2, 4])
+            world = make_world({1: instance})
+            world.schema['properties'][3] = {'name': 'CFrame', 'type': 27}
+            geometry = extract_ground(world)
+            self.assertEqual(len(geometry.colliders), 1, selector)
+            self.assertAlmostEqual(geometry.colliders[0].maximum[2], expected_z, places=6)
+        instance['properties']['ReplicationPV']['rotation'] = packed
+        geometry = extract_ground(world)
+        self.assertAlmostEqual(geometry.colliders[0].maximum[0], 12*math.sqrt(.5), places=2)
+        instance['properties']['ReplicationPV']['rotation'] = [0.]*7
+        self.assertEqual(extract_ground(world).colliders, ())
 
     def test_type51_identity_selector_is_two(self):
         world = make_world({1: part(CanCollide=True, Anchored=True,
