@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import Mock
 
 from render_assets import RenderAssets, asset_reference, decode_render_mesh
+from mesh_asset_decoder import decode_filemesh
 from persistent_runtime import PersistentLuauHost
 from test_world_snapshot import fixture
 from world_snapshot import make_world_snapshot
@@ -58,6 +59,18 @@ class RenderAssetTests(unittest.TestCase):
         raw=b'version 1.00\n1\n'+b''.join(('[%s,%s,%s]'%v).encode() for v in [(0,0,0),(0,0,1),(0,.25,0),(2,0,0),(0,0,1),(1,.25,0),(0,2,0),(0,0,1),(0,1,0)])
         mesh=decode_render_mesh(raw)
         self.assertEqual(mesh['positions'][3:6],[1,0,0]);self.assertEqual(mesh['uv'][:2],[0,.75])
+
+    def test_empty_lod_table_draws_every_face(self):
+        # Dynamic heads (5.00) store a LOD table of 0, 0: one level of every face.
+        mesh=decode_render_mesh(mesh_bytes('5.00',1,lods=(0,0)))
+        self.assertEqual(mesh['indices'],[0,1,2])
+
+    def test_legacy_mesh_with_crlf_line_endings(self):
+        # Old catalog meshes (hair from 2010 and earlier) use Windows line endings.
+        lf=b'version 1.00\n1\n'+b''.join(('[%s,%s,%s]'%v).encode() for v in [(0,0,0),(0,0,1),(0,.25,0),(2,0,0),(0,0,1),(1,.25,0),(0,2,0),(0,0,1),(0,1,0)])
+        crlf=lf.replace(b'\n',b'\r\n')
+        self.assertEqual(decode_render_mesh(crlf),decode_render_mesh(lf))
+        self.assertEqual(decode_filemesh(crlf).vertices,decode_filemesh(lf).vertices)
 
     def test_asset_scope_is_required_before_fetch_and_reset_revokes_it(self):
         fetcher=Mock(return_value=mesh_bytes());store=RenderAssets(fetcher)

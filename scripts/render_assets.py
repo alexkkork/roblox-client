@@ -61,6 +61,7 @@ def decode_render_mesh(raw):
     version, newline, body = data.partition(b'\n')
     if not newline:
         raise ValueError('Missing mesh header')
+    version = version.rstrip(b'\r')  # many legacy text meshes use CRLF line endings
     positions, normals, uv, indices = [], [], [], []
     bones = 0
     if version in (b'version 1.00', b'version 1.01'):
@@ -119,8 +120,11 @@ def decode_render_mesh(raw):
             offsets = struct.unpack_from('<' + 'I'*lods, body, lod_start)
             if offsets[0] != 0 or any(a > b for a, b in zip(offsets, offsets[1:])) or offsets[-1] > faces:
                 raise ValueError('Invalid mesh LOD range')
-            if lods > 1:
-                end = offsets[1]
+            # Draw the first non-empty level; a table of empty levels (dynamic
+            # heads store 0, 0) means one level of every face.
+            levels = [(a, b) for a, b in zip(offsets, offsets[1:]) if a < b]
+            if levels:
+                start, end = levels[0]
         for i in range(vertices):
             values = struct.unpack_from('<8f', body, header+i*stride)
             positions.extend(values[:3]); normals.extend(values[3:6]); uv.extend(values[6:8])

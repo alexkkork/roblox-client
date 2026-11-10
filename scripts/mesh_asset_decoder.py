@@ -141,6 +141,8 @@ def decode_filemesh(raw: bytes) -> DecodedMeshAsset:
             raise MeshAssetError('mesh_invalid_compression') from None
         if len(data)>MAX_INPUT: raise MeshAssetError('mesh_asset_expansion_limit')
     first,sep,body=data.partition(b'\n')
+    # Many legacy text meshes use CRLF line endings.
+    first=first.rstrip(b'\r')
     try: version=first.decode('ascii','strict') if first else ''
     except UnicodeDecodeError: raise MeshAssetError('mesh_invalid_header') from None
     if not sep or version not in ('version 1.00','version 1.01','version 2.00'):
