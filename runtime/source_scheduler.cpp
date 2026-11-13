@@ -199,6 +199,8 @@ int SourceScheduler::identity_api(lua_State* L) {
         // conversion even for nonstandard IDs; unknown IDs grant no engine
         // capabilities and do not change the thread's source provenance.
         int value=luaL_checkinteger(L,1);
+        // Identities are never negative (the workspace setidentity checks this too).
+        luaL_argcheck(L,value>=0,1,"identity must not be negative");
         try{set_identity(L,value);}catch(const std::exception& e){return luaL_error(L,"%s",e.what()),0;}
         return 0;
     }
@@ -383,11 +385,16 @@ void SourceScheduler::install(lua_State* L) {
     for(const auto& alias:{std::pair{"Wait","wait"},std::pair{"Spawn","spawn"},std::pair{"Delay","delay"},std::pair{"ElapsedTime","elapsedTime"}}) {
         lua_getglobal(L,alias.second);lua_setglobal(L,alias.first);
     }
+    // Static name tables: a range-for over `cond ? initializer_list : initializer_list`
+    // read the lists' arrays after they were destroyed, and in practice
+    // overwrote the global `wait` with setthreadidentity.
+    static const char* const identity_names[2][3]={
+        {"getthreadidentity","getidentity","getthreadcontext"},
+        {"setthreadidentity","setidentity","setthreadcontext"}};
     for(int setter=0;setter<2;++setter) {
-        lua_pushboolean(L,setter);lua_pushcclosure(L,identity_api,setter?"setthreadidentity":"getthreadidentity",1);
+        lua_pushboolean(L,setter);lua_pushcclosure(L,identity_api,identity_names[setter][0],1);
         mark_executor_closure(L,-1);
-        for(const char* name:setter?std::initializer_list<const char*>{"setthreadidentity","setidentity","setthreadcontext"}
-                                  :std::initializer_list<const char*>{"getthreadidentity","getidentity","getthreadcontext"}) {
+        for(const char* name:identity_names[setter]) {
             lua_pushvalue(L,-1);lua_setglobal(L,name);
         }
         lua_pop(L,1);
