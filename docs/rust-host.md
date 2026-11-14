@@ -16,6 +16,10 @@ remain unavailable.
 The existing Rust transport, received-world storage, physics solver and
 browser frontend use the same bounded host request/response protocol.
 
+`Shapecast` and `GetPartsInPart` use occupied primitive and decoded mesh geometry,
+with current-world updates, filters, hypothetical poses and shape growth.
+See [part collision queries](spatial-queries.md) for supported geometry and limits.
+
 Actors keep separate Luau states and share the configured aggregate VM
 memory budget. Their remote request IDs are routed back to the issuing VM;
 unknown or mismatched responses do not complete a waiter. World metadata

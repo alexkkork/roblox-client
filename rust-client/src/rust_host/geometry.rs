@@ -1,8 +1,7 @@
 //! Bounded local spatial queries over the projected Instance world.
 //!
-//! This first Rust slice implements WorldRoot:Raycast against oriented box
-//! parts. Terrain, decoded mesh, round primitives and sweep/overlap APIs are
-//! intentionally added in separate steps rather than returning guessed hits.
+//! Primitive, decoded mesh and voxel queries share the current world catalog.
+//! Shape sweeps and occupied-volume queries live in part_queries.
 use super::{
     cframe::CFrameValue,
     misc_values::{self, QueryConfig},
@@ -10,6 +9,8 @@ use super::{
     world::{self, WorldRef},
 };
 
+#[path = "geometry_part_queries.rs"]
+mod part_queries;
 #[cfg(test)]
 #[path = "geometry_tests.rs"]
 mod tests;
@@ -1068,33 +1069,42 @@ fn descendant(ctx: &WorldRef, id: &str, ancestor: &str) -> bool {
     false
 }
 fn query_ids(ctx: &WorldRef, root: &str) -> mlua::Result<Vec<String>> {
-    let ids = {
-        let world = ctx.borrow();
-        let mut ids = world
-            .snapshot
-            .get("nodes")
-            .and_then(Json::as_array)
-            .map(|nodes| {
-                nodes
-                    .iter()
-                    .filter_map(|n| n.get("id").and_then(Json::as_str).map(ToOwned::to_owned))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_else(|| world.nodes.keys().cloned().collect::<Vec<_>>());
-        for node in world.nodes.values().filter(|n| !n.server_owned) {
-            if !ids.contains(&node.id) {
-                ids.push(node.id.clone())
-            }
-        }
-        ids
-    };
-    if ids.len() > MAX_CANDIDATES {
+    let world = ctx.borrow();
+    if world.nodes.len() > MAX_CANDIDATES {
         return Err(err("ray query geometry work limit exceeded"));
     }
-    Ok(ids
-        .into_iter()
-        .filter(|id| id != root && descendant(ctx, id, root))
-        .collect())
+    let mut seen = std::collections::HashSet::new();
+    let mut ids: Vec<&str> = world
+        .snapshot
+        .get("nodes")
+        .and_then(Json::as_array)
+        .map(|nodes| {
+            nodes
+                .iter()
+                .filter_map(|n| n.get("id").and_then(Json::as_str))
+                .filter(|id| seen.insert(*id) && world.nodes.contains_key(*id))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    // Received creates are absent from the initial snapshot. Include them,
+    // as well as local parts, without the previous quadratic contains scan.
+    let mut added: Vec<&str> = world
+        .nodes
+        .keys()
+        .map(String::as_str)
+        .filter(|id| seen.insert(*id))
+        .collect();
+    added.sort_unstable();
+    ids.extend(added);
+    let mut membership = std::collections::HashMap::new();
+    let mut work = 0usize;
+    let mut result = Vec::new();
+    for id in ids {
+        if id != root && part_queries::in_root(&world, id, root, &mut membership, &mut work)? {
+            result.push(id.to_owned());
+        }
+    }
+    Ok(result)
 }
 fn raycast(lua: &Lua, ctx: &WorldRef, root: &str, args: MultiValue) -> mlua::Result<MultiValue> {
     let args: Vec<Value> = args.into_iter().collect();
@@ -2174,10 +2184,14 @@ fn filtered(
     let can_collide = world::get_property(ctx, id, "CanCollide")
         .ok()
         .and_then(|v| v.as_bool());
-    if f.respect_collide && can_collide == Some(false) {
+    if !f.brute_force && f.respect_collide && can_collide == Some(false) {
         return Ok(false);
     }
-    if !f.respect_collide && can_query == Some(false) && can_collide == Some(false) {
+    if !f.brute_force
+        && !f.respect_collide
+        && can_query == Some(false)
+        && can_collide == Some(false)
+    {
         return Ok(false);
     }
     if !f.brute_force {
@@ -3746,6 +3760,7 @@ group_methods!(
 );
 
 pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
+    part_queries::install(ctx);
     world::register_method(ctx, "Workspace", "Raycast", raycast);
     world::register_method(ctx, "WorldModel", "Raycast", raycast);
     world::register_method(ctx, "Workspace", "Spherecast", spherecast);

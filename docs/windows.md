@@ -37,6 +37,16 @@ the package also has open noto fonts for an offline check, without a roblox inst
 
 that command's sourcesans alias is a test fixture, not a production font replacement. measurements are not a pixel-perfect roblox rendering claim. each runtime retains up to 2 mib of cached font file data and 512 kib of measurement entries; shaping metadata and active requests use additional memory.
 
+## collision queries
+
+`Shapecast` sweeps a part through the local world. `GetPartsInPart` finds parts whose occupied geometry overlaps it. both run in rust, including rotated primitives, decoded meshes, filters, and world updates. missing mesh collision data stays an error. these queries don't move the character or replace the physics solver.
+
+the package includes a self-contained 12-check script:
+
+```powershell
+.\rove.exe run --snapshot tests/fixtures/world_snapshot.json --script examples/spatial-query-smoke.luau --json
+```
+
 ## private files and console
 
 the console uses a random token and a loopback-only tcp port. its endpoint file is private and disappears when the process closes. account files and their directory must allow access only to your windows user, system, and administrators. create a dedicated directory before saving any credentials:
