@@ -176,6 +176,41 @@ fn disabled_provider_and_missing_glyphs_return_errors_without_poisoning_other_ru
 }
 
 #[test]
+fn cold_synchronous_font_work_after_a_yield_keeps_the_authored_task_budget() {
+    struct ColdFont(headless_luau::engine_services::local_text::LocalTextBackend);
+    impl headless_luau::engine_services::TextServiceBackend for ColdFont {
+        fn handle(
+            &self,
+            request: &headless_luau::engine_services::TextRequest,
+        ) -> Result<Value, String> {
+            // Reproduce a cold disk/font parse taking longer than a 5 ms host
+            // poll. The measurement still uses the real pinned font file.
+            std::thread::sleep(Duration::from_millis(15));
+            self.0.handle(request)
+        }
+    }
+    let mut runtime = Runtime::with_text_backend(
+        snapshot(),
+        32,
+        Some(Arc::new(ColdFont(LocalTextBackend::new(
+            root().join("tests/fixtures"),
+        )))),
+    )
+    .unwrap();
+    execute(
+        &mut runtime,
+        r#"
+        task.wait()
+        local bounds = game:GetService("TextService"):GetTextSize("Hello",20,Enum.Font.SourceSans,Vector2.zero)
+        local after = 0
+        for i = 1,100000 do after += i end
+        assert(bounds.X == 49 and bounds.Y == 20 and after == 5000050000)
+        return true
+    "#,
+    );
+}
+
+#[test]
 fn executable_content_root_applies_to_synchronous_text_service() {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_rove"))
         .args(["run", "--snapshot"])

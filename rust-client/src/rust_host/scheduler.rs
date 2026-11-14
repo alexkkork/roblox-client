@@ -864,18 +864,22 @@ pub fn step_with_limits(
         }
 
         let started = Instant::now();
-        let task_deadline = started + policy.slice.min(remaining);
+        // A short host poll is a scheduling boundary, not a smaller authored
+        // task budget. Strict tasks may finish their configured slice across
+        // several polls, but cannot reset it by being preempted each frame.
+        let slice_remaining = if policy.resume_across_frames {
+            policy.slice.min(remaining)
+        } else {
+            policy.slice.saturating_sub(uninterrupted).min(remaining)
+        };
+        let task_deadline = started + slice_remaining;
         let resume_deadline = host_deadline.min(task_deadline);
         let hard_limit = if policy.resume_across_frames {
             remaining.min(NONYIELDING_LIMIT.saturating_sub(uninterrupted))
         } else {
-            policy.slice.min(remaining)
+            slice_remaining
         };
-        let hard_deadline = if policy.resume_across_frames {
-            started + hard_limit
-        } else {
-            resume_deadline
-        };
+        let hard_deadline = started + hard_limit;
         let interrupt =
             match deadline_interrupt::DeadlineInterrupt::new(lua, resume_deadline, hard_deadline) {
                 Ok(interrupt) => interrupt,
@@ -987,7 +991,7 @@ pub fn step_with_limits(
             report.preempted += 1;
             if uninterrupted >= NONYIELDING_LIMIT
                 || cpu_elapsed >= policy.total
-                || !policy.resume_across_frames
+                || (!policy.resume_across_frames && uninterrupted >= policy.slice)
             {
                 let message = if uninterrupted >= NONYIELDING_LIMIT {
                     "local Luau task exceeded the 2 second non-yielding limit"

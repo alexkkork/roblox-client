@@ -129,6 +129,38 @@ fn caught_non_yieldable_callback_timeout_is_terminal_and_does_not_poison_next_jo
 }
 
 #[test]
+fn short_host_polls_cannot_shorten_or_reset_a_strict_task_slice() {
+    let (lua, scheduler) = runtime();
+    let function = lua.load("while true do end").into_function().unwrap();
+    let policy =
+        TaskPolicy::new(Duration::from_millis(50), Duration::from_millis(500), false).unwrap();
+    let thread = scheduler::enqueue_with_policy(&lua, function, MultiValue::new(), policy).unwrap();
+    scheduler::step(&lua, &scheduler, Instant::now(), Duration::from_millis(1));
+    assert!(
+        scheduler::take_outcome(&scheduler, &thread).is_none(),
+        "the first 1 ms poll must not exhaust a 50 ms task slice"
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        scheduler::step(&lua, &scheduler, Instant::now(), Duration::from_millis(1));
+        if let Some(outcome) = scheduler::take_outcome(&scheduler, &thread) {
+            assert!(matches!(outcome, TaskOutcome::TimedOut(_)), "{outcome:?}");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "strict slice was reset between host polls"
+        );
+    }
+    let diagnostic = scheduler::diagnostics(&scheduler, &thread).unwrap();
+    assert!(diagnostic.resumes > 1);
+    assert!(
+        diagnostic.execution_ms >= 50.0 && diagnostic.execution_ms < 500.0,
+        "{diagnostic:?}"
+    );
+}
+
+#[test]
 fn task_wait_resumes_with_elapsed_time_on_a_later_step() {
     let (lua, scheduler) = runtime();
     lua.load(
