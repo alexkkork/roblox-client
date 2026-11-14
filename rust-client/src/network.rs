@@ -1525,9 +1525,18 @@ mod tests {
                 .unwrap(),
             b"hi".to_vec()
         );
-        assert!(values
+        // A later poll has no messages of its own, so it reports `error`;
+        // only a batch containing both the message and failure uses
+        // `transport_error`. Both must retain the actual protocol failure.
+        let error = values
             .iter()
-            .any(|value| value["transport_error"].as_str().is_some()));
+            .find_map(|value| {
+                value["transport_error"]
+                    .as_str()
+                    .or_else(|| value["error"].as_str())
+            })
+            .expect("terminal protocol error was not delivered");
+        assert!(error.to_lowercase().contains("invalid opcode"), "{error}");
         assert!(!sockets().lock().unwrap().sockets.contains_key(&id));
 
         let (id, results) = poll_ready_after_frames(vec![0x83, 0x00]);
