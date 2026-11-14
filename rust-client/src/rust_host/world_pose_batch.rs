@@ -55,6 +55,9 @@ pub(crate) fn apply_pose_batch(
     let error = |s: &str| mlua::Error::RuntimeError(s.into());
     let mut world = ctx.borrow_mut();
     let actor = world.local_namespace.starts_with("local:actor:");
+    if actor && writes.len() > 4096 {
+        return Err(error("Actor pose target limit exceeded"));
+    }
     let (max_rows, max_bytes) = if actor {
         (4096, 1024 * 1024)
     } else {
@@ -267,5 +270,27 @@ mod tests {
             .to_string();
         assert!(error.contains("byte limit"), "{error}");
         assert!(w.borrow().nodes["part"].local_overrides.is_empty());
+    }
+
+    #[test]
+    fn actor_replay_target_limit_rejects_a_large_valid_batch_before_writing() {
+        let root = setup();
+        let w = Rc::new(RefCell::new(root.borrow().fork_for_actor("actor")));
+        let original = w.borrow().nodes["part"].clone();
+        let writes = (0..4097)
+            .map(|i| {
+                let id = format!("part:{i}");
+                let mut node = original.clone();
+                node.id = id.clone();
+                w.borrow_mut().nodes.insert(id.clone(), node);
+                write(&id)
+            })
+            .collect::<Vec<_>>();
+        let error = apply_pose_batch(&w, &writes, true).unwrap_err().to_string();
+        assert!(error.contains("target limit"), "{error}");
+        assert!(writes
+            .iter()
+            .all(|write| w.borrow().nodes[&write.id].local_overrides.is_empty()));
+        assert!(w.borrow().effects.get("mutations").is_none());
     }
 }

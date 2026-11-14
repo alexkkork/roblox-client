@@ -378,8 +378,11 @@ fn callback_keeps_creator_identity_after_creator_task_finishes() {
 #[test]
 fn nested_coroutine_preemption_resumes_transparently_and_preserves_results() {
     let (lua, scheduler) = runtime();
+    // Exercise short preemption slices without requiring six million VM loop
+    // iterations to finish in 500 ms on a busy runner. The infinite-coroutine
+    // test below separately checks that the total execution budget is enforced.
     let policy =
-        TaskPolicy::new(Duration::from_millis(1), Duration::from_millis(500), true).unwrap();
+        TaskPolicy::new(Duration::from_millis(1), Duration::from_secs(2), true).unwrap();
     for source in [
         r#"local leaf=coroutine.create(function() local n=0; for i=1,6000000 do n+=i end; return 'resume-ok',nil,n end); local middle=coroutine.create(function() return coroutine.resume(leaf) end); return coroutine.resume(middle)"#,
         r#"local child=coroutine.wrap(function() local n=0; for i=1,6000000 do n+=i end; return 'wrap-ok',nil,n end); return child()"#,

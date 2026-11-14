@@ -44,7 +44,8 @@ response and mutation limits still apply.
 
 A root transform batch accepts up to 8 MiB of encoded mutations and at most
 16,384 pending journal rows. Actor journals retain their aggregate 1 MiB / 4,096
-row limits. These are component budgets, not a total-process RAM claim. Long
+row limits, and each Actor batch accepts at most 4,096 targets. These are
+component budgets, not a total-process RAM claim. Long
 animations should yield or submit updates over multiple host ticks so mutation
 output is drained within the normal response limit.
 
