@@ -160,9 +160,10 @@ fn part_node(index: u32, property: Value) -> Value {
         "parent": null,
         "properties": {"SharedPayload": property},
         "origins": {},
-        // this packet finished creating the node; constructor defaults are still unknown
+        // this packet created the node completely: omitted properties are
+        // constructor defaults
         "received_creation_complete": true,
-        "constructor_defaults_known": false
+        "constructor_defaults_known": true
     })
 }
 

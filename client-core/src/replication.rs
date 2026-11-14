@@ -631,7 +631,11 @@ impl PacketParser<'_> {
         let node = json!({"id":id,"class_name":class.name,
             "parent":parent,"properties":Value::Object(properties),"origins":{},
             "received_creation_complete":true,
-            "constructor_defaults_known":false});
+            // A decoded creation record is complete (decoding is
+            // transactional): properties it omits are the class's constructor
+            // defaults (BoolValue.Value false, ...). The world store clears this
+            // when the instance already existed.
+            "constructor_defaults_known":true});
         self.next_sequence = self
             .next_sequence
             .checked_add(1)

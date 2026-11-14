@@ -898,6 +898,13 @@ impl WorldStore {
                         if existing.class_name != node.class_name {
                             return Err(format!("replicated instance {action_id:?} changed class"));
                         }
+                        // Re-created, not fresh: omitted properties are not
+                        // known to be constructor defaults.
+                        let mut metadata = node.metadata.unpack();
+                        if metadata.get("constructor_defaults_known") == Some(&Value::Bool(true)) {
+                            metadata.insert("constructor_defaults_known".into(), Value::Bool(false));
+                            node.metadata = PackedMetadata::new(&metadata)?;
+                        }
                     }
                     next.insert(node);
                     if next.node_count > MAX_NODES {

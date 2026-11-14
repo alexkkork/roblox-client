@@ -220,6 +220,16 @@ const Json* property_descriptor(const Node& node, const std::string& key) {
         if(key=="Size")return &size;
         if(key=="SizeOffset")return &offset;
     }
+    // The generated constructor table has no enum defaults. These classes are
+    // constructed with Plastic, and parts that keep it (most avatar parts) never
+    // receive Material, which left it and the assembly mass unavailable.
+    if(key=="Material") {
+        static const std::unordered_set<std::string> plastic{"Part","MeshPart","WedgePart","CornerWedgePart",
+            "UnionOperation","Seat","VehicleSeat"};
+        static const Json material{{"type","Enum"},{"enum_type","Material"},{"writable",true},
+            {"value",Json{{"$enum",{{"type","Material"},{"value",256},{"name","Plastic"}}}}}};
+        if(plastic.count(node.class_name))return &material;
+    }
     if((node.class_name=="Part"||node.class_name=="WedgePart"||node.class_name=="FormFactorPart")&&key=="formFactorRaw") {
         // The 0.745 FormFactorPart constructor at 0x1010b3620 stores 1 at
         // +0x1a8, the byte read by the reflected formFactorRaw accessor.
