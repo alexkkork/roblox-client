@@ -7,6 +7,7 @@ pub mod actor_io;
 pub mod actor_shadow;
 pub mod actors;
 pub mod bindables;
+pub mod camera;
 pub mod cframe;
 pub mod closures;
 pub mod drawing;
@@ -62,6 +63,7 @@ pub fn install_bindings(lua: &mlua::Lua, ctx: &world::WorldRef) -> mlua::Result<
     movement::install(lua, ctx)?;
     input::install(lua, ctx)?;
     gui::install(lua, ctx)?;
+    camera::install(lua, ctx)?;
     drawing::install(lua, ctx)?;
     playback::install(lua, ctx)?;
     services::install(lua, ctx)?;

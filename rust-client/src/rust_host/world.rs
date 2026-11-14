@@ -73,6 +73,7 @@ pub struct World {
     pub nodes: HashMap<String, Node>,
     pub services: HashMap<String, String>,
     pub snapshot: Json,
+    pub(crate) camera_state: super::camera::CameraState,
     pub sequence: u64,
     lightweight_assets: bool,
     pub effects: JsonMap<String, Json>,
@@ -103,6 +104,7 @@ impl World {
             nodes: self.nodes.clone(),
             services: self.services.clone(),
             snapshot: self.snapshot.clone(),
+            camera_state: self.camera_state.clone(),
             sequence: self.sequence,
             lightweight_assets: self.lightweight_assets,
             effects: JsonMap::new(),
@@ -205,6 +207,8 @@ impl World {
         self.node_order = order;
         self.services = root.services.clone();
         self.snapshot = root.snapshot.clone();
+        self.camera_state
+            .sync_from_root(&root.camera_state, &self.local_namespace);
         self.sequence = root.sequence;
         self.local_revision = self.local_revision.max(root.local_revision);
         self.next_local_id = self.next_local_id.max(root.next_local_id);
@@ -221,6 +225,7 @@ impl World {
             return Err("unsupported or missing world snapshot version".into());
         }
         let sequence = root.get("sequence").and_then(Json::as_u64).unwrap_or(0);
+        let display = super::camera::display_update(root)?;
         let records = root.get("nodes").and_then(Json::as_array);
         if records.is_none() && shared.is_none() {
             return Err("world snapshot nodes must be an array without a projected view".into());
@@ -236,6 +241,7 @@ impl World {
             nodes: HashMap::with_capacity(node_count),
             services: HashMap::new(),
             snapshot: Json::Null,
+            camera_state: super::camera::CameraState::default(),
             sequence,
             lightweight_assets: root
                 .get("lightweight_assets")
@@ -516,6 +522,9 @@ impl World {
             object.remove("nodes");
         }
         world.snapshot = metadata;
+        if let Some(display) = display {
+            world.snapshot["display"] = display;
+        }
         Ok(world)
     }
 
@@ -530,6 +539,7 @@ impl World {
             nodes: self.nodes.clone(),
             services: self.services.clone(),
             snapshot: self.snapshot.clone(),
+            camera_state: self.camera_state.clone(),
             sequence: self.sequence,
             lightweight_assets: self.lightweight_assets,
             effects: self.effects.clone(),
@@ -570,6 +580,7 @@ impl World {
         shared: Option<&SharedProjectedWorldView>,
     ) -> Result<(), String> {
         let root = delta.as_object().ok_or("world delta must be an object")?;
+        let display = super::camera::display_update(root)?;
         if serde_json::to_vec(delta)
             .map_err(|error| error.to_string())?
             .len()
@@ -963,6 +974,9 @@ impl World {
                 .get(id)
                 .is_some_and(|node| !node.destroyed && node.class_name == name.as_str())
         });
+        if let Some(display) = display {
+            self.snapshot["display"] = display;
+        }
         Ok(())
     }
 }
@@ -1078,6 +1092,7 @@ pub fn apply_delta_with_lua(
         .and_then(Json::as_array)
         .ok_or_else(|| mlua::Error::RuntimeError("world delta actions must be an array".into()))?;
     let starting_sequence = ctx.borrow().sequence;
+    let camera_before = super::camera::observe_delta(ctx, delta);
     let (previous_player, previously_loaded) = {
         let world = ctx.borrow();
         (
@@ -1182,6 +1197,7 @@ pub fn apply_delta_with_lua(
     ctx.borrow_mut()
         .apply_delta(delta, shared)
         .map_err(mlua::Error::RuntimeError)?;
+    super::camera::refresh_after_delta(lua, ctx, delta, camera_before)?;
     resolve_instance_handle_waiters(lua, ctx)?;
     refresh_globals(lua, ctx)?;
     let (player, loaded, players_service, game) = {
@@ -1413,6 +1429,7 @@ pub fn sync_actor_fork_with_lua(
     root_world: &WorldRef,
     journal: &[Json],
 ) -> mlua::Result<()> {
+    let camera_before = super::camera::observe_actor(actor_world, root_world);
     let mut touched = std::collections::HashSet::new();
     let mut destroyed = Vec::new();
     for row in journal {
@@ -1476,6 +1493,7 @@ pub fn sync_actor_fork_with_lua(
         let root = root_world.borrow();
         actor_world.borrow_mut().sync_actor_fork(&root);
     }
+    super::camera::refresh_after_actor_sync(lua, actor_world, camera_before, journal)?;
     for row in journal {
         let kind = row.get("kind").and_then(Json::as_str).unwrap_or_default();
         match kind {
@@ -2551,6 +2569,9 @@ pub fn set_property(
         .push(mutation);
     drop(world);
     let changed = old_value.as_ref() != Some(&value);
+    if key == "CurrentCamera" {
+        super::camera::refresh(lua, ctx)?;
+    }
     if changed {
         emit_property_changed(lua, ctx, id, key)?;
     }
@@ -2704,6 +2725,12 @@ fn local_part_mass_default(class: &str, key: &str) -> Option<Json> {
 
 fn constructor_default(class: &str, key: &str) -> mlua::Result<(Json, bool)> {
     let classes = constructors().get("classes");
+    if key == "FieldOfViewMode" && class_chain(class).iter().any(|c| c == "Camera") {
+        return Ok((
+            json!({"$enum":{"type":"FieldOfViewMode","name":"Vertical","value":0}}),
+            true,
+        ));
+    }
     if key == "ClassName" {
         return Ok((json!(class), false));
     }

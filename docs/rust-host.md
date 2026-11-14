@@ -26,6 +26,11 @@ automatic versus explicit model pivots, nested geometry and cached relative
 transforms. Authored moves commit before callbacks and merge atomically from
 Actor VMs.
 
+[Camera projection](camera-projection.md) uses the host display, device/core
+insets and each camera's current pose and lens. Perspective projection and
+screen rays, active/inactive viewport state, FOV modes and atomic lens edits
+run in Rust and propagate to Actor VMs.
+
 Actors keep separate Luau states and share the configured aggregate VM
 memory budget. Their remote request IDs are routed back to the issuing VM;
 unknown or mismatched responses do not complete a waiter. World metadata
@@ -37,7 +42,7 @@ changes emit the same service and loaded-state signals as the old host.
 | Instances, properties, world updates and services | `world.rs`, `services.rs` |
 | Events, callbacks, scripts and Actors | `signals.rs`, `lifecycle.rs`, `actors.rs` |
 | Movement, spatial queries, input and playback | `movement.rs`, `geometry.rs`, `input.rs`, `playback.rs` |
-| GUI and Drawing | `gui.rs`, `drawing.rs` |
+| Camera projection, GUI and Drawing | `camera.rs`, `gui.rs`, `drawing.rs` |
 | Portable font shaping and text layout | `rust-client/src/engine_services/local_text.rs`, `text_shaping.rs` |
 | File, console and network bindings | `source_helpers.rs`, `host_io_bindings.rs` |
 | Official VM compilation and ABI checks | `rust-runtime-sys` |

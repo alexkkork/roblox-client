@@ -55,6 +55,16 @@ model pivots and bounds also run in rust. the package has a 12-check script for 
 .\rove.exe run --snapshot tests/fixtures/world_snapshot.json --script examples/model-pivots-smoke.luau --json
 ```
 
+## camera projection
+
+camera screen coordinates and rays run in rust too. they use the host viewport, camera rotation, field of view, and device/core ui insets. lens modes and viewport changes also reach actor vms. this is camera geometry; it does not draw the scene.
+
+the package includes a 16-check offline script:
+
+```powershell
+.\rove.exe run --snapshot tests/fixtures/camera_projection_snapshot.json --script examples/camera-projection-smoke.luau --json
+```
+
 ## private files and console
 
 the console uses a random token and a loopback-only tcp port. its endpoint file is private and disappears when the process closes. account files and their directory must allow access only to your windows user, system, and administrators. create a dedicated directory before saving any credentials:

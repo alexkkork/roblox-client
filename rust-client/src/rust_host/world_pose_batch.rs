@@ -88,6 +88,10 @@ pub(crate) fn apply_pose_batch(
                     | "Rotation"
                     | "CoordinateFrame"
                     | "WorldPivot"
+                    | "FieldOfView"
+                    | "DiagonalFieldOfView"
+                    | "MaxAxisFieldOfView"
+                    | "FieldOfViewMode"
                     | EXPLICIT_PIVOT
             ) {
                 return Err(error("invalid pose batch property"));
@@ -95,11 +99,15 @@ pub(crate) fn apply_pose_batch(
             let chain = class_chain(&node.class_name);
             let model = chain.iter().any(|c| c == "Model");
             let part = chain.iter().any(|c| c == "BasePart");
-            let camera = node.class_name == "Camera";
+            let camera = chain.iter().any(|c| c == "Camera");
             let allowed = match key.as_str() {
                 "WorldPivot" | EXPLICIT_PIVOT => model,
                 "CFrame" => part || camera,
-                "CoordinateFrame" => camera,
+                "CoordinateFrame"
+                | "FieldOfView"
+                | "DiagonalFieldOfView"
+                | "MaxAxisFieldOfView"
+                | "FieldOfViewMode" => camera,
                 _ => part,
             };
             if !allowed {
@@ -108,6 +116,25 @@ pub(crate) fn apply_pose_batch(
             if key == EXPLICIT_PIVOT {
                 if value != &json!(true) {
                     return Err(error("invalid explicit pivot state"));
+                }
+            } else if key == "FieldOfViewMode" {
+                if value.pointer("/$enum/type").and_then(Json::as_str) != Some("FieldOfViewMode")
+                    || value
+                        .pointer("/$enum/value")
+                        .and_then(Json::as_i64)
+                        .is_none_or(|n| !(0..=2).contains(&n))
+                {
+                    return Err(error("invalid camera field-of-view mode"));
+                }
+            } else if matches!(
+                key.as_str(),
+                "FieldOfView" | "DiagonalFieldOfView" | "MaxAxisFieldOfView"
+            ) {
+                if value
+                    .as_f64()
+                    .is_none_or(|n| !n.is_finite() || n <= 0. || n >= 180.)
+                {
+                    return Err(error("invalid camera field of view"));
                 }
             } else if matches!(key.as_str(), "CFrame" | "CoordinateFrame" | "WorldPivot") {
                 let cf = value
