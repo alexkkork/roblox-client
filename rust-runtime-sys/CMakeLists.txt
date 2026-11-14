@@ -6,6 +6,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 if(NOT DEFINED ROVE_LUAU_SOURCE)
     message(FATAL_ERROR "ROVE_LUAU_SOURCE must point to the pinned vendor/luau checkout")
 endif()
+# CONFIGURE_DEPENDS writes these paths into generated CMake code. Native
+# Windows backslashes would become escapes such as \a in that generated file.
+file(TO_CMAKE_PATH "${ROVE_LUAU_SOURCE}" ROVE_LUAU_SOURCE)
 
 # MLua's Luau backend calls the public Lua C API with C linkage. The upstream
 # sources are C++, so compile their public API declarations/definitions with
