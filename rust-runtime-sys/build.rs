@@ -39,7 +39,7 @@ fn main() {
         );
         // cmake-rs otherwise replaces MSVC's Release flags with its CRT flags.
         // Keep the VM optimized even inside an unoptimized Cargo test build.
-        config.define("CMAKE_CXX_FLAGS_RELEASE", "/O2 /DNDEBUG");
+        config.define("CMAKE_CXX_FLAGS_RELEASE", "/O2 /DNDEBUG /EHsc");
     }
     let dst = config.build();
     println!(

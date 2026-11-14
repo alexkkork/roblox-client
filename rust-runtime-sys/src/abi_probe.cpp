@@ -5,6 +5,10 @@
 #include <cstddef>
 #include <cstring>
 
+#if defined(_MSC_VER) && !defined(_CPPUNWIND) && !LUA_USE_LONGJMP
+#error "The pinned Luau VM requires MSVC exception unwinding (/EHsc)"
+#endif
+
 // MLua expects the small FFlag adapter normally supplied by luau0-src.
 // Resolve the pinned VM's real registry; an unknown name is never accepted.
 // Like upstream, callers must configure flags before creating any VM.
