@@ -47,6 +47,14 @@ the package includes a self-contained 12-check script:
 .\rove.exe run --snapshot tests/fixtures/world_snapshot.json --script examples/spatial-query-smoke.luau --json
 ```
 
+## model transforms
+
+model pivots and bounds also run in rust. the package has a 12-check script for `GetPivot`, `GetBoundingBox`, `GetExtentsSize`, offsets, cloning, and nested transforms:
+
+```powershell
+.\rove.exe run --snapshot tests/fixtures/world_snapshot.json --script examples/model-pivots-smoke.luau --json
+```
+
 ## private files and console
 
 the console uses a random token and a loopback-only tcp port. its endpoint file is private and disappears when the process closes. account files and their directory must allow access only to your windows user, system, and administrators. create a dedicated directory before saving any credentials:

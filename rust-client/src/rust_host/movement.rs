@@ -14,6 +14,9 @@ use mlua::{
 use serde_json::{json, Value as Json};
 use std::cell::Cell;
 
+#[path = "model_pivots.rs"]
+mod pivots;
+
 fn err(message: impl Into<String>) -> mlua::Error {
     mlua::Error::RuntimeError(message.into())
 }
@@ -266,23 +269,6 @@ fn install_humanoid_state_enum(lua: &Lua) -> mlua::Result<()> {
     replacement.set_readonly(true);
     lua.globals().set("Enum", replacement)?;
     Ok(())
-}
-fn descendant_ids(ctx: &WorldRef, root: &str) -> Vec<String> {
-    let world = ctx.borrow();
-    let mut out = vec![root.to_owned()];
-    let mut cursor = 0;
-    while cursor < out.len() && out.len() < 100_000 {
-        let parent = out[cursor].clone();
-        cursor += 1;
-        out.extend(
-            world
-                .nodes
-                .values()
-                .filter(|n| !n.destroyed && n.parent.as_deref() == Some(&parent))
-                .map(|n| n.id.clone()),
-        );
-    }
-    out
 }
 fn property(ctx: &WorldRef, id: &str, name: &str) -> mlua::Result<Json> {
     world::get_property(ctx, id, name)
@@ -663,118 +649,6 @@ fn get_gravity(lua: &Lua, ctx: &WorldRef, id: &str) -> mlua::Result<Option<Value
     let json = world::get_property(ctx, id, "Gravity")?;
     Ok(Some(values::from_json(lua, &json)?))
 }
-fn model_translate(
-    lua: &Lua,
-    ctx: &WorldRef,
-    id: &str,
-    args: MultiValue,
-) -> mlua::Result<MultiValue> {
-    let args: Vec<Value> = args.into_iter().collect();
-    if args.len() != 1 {
-        return Err(err("TranslateBy expects one Vector3"));
-    }
-    let delta = vector(&args[0], "TranslateBy")?;
-    let ids = descendant_ids(ctx, id);
-    let mut writes = Vec::new();
-    for part in ids {
-        if !is_basepart(ctx, &part) {
-            continue;
-        }
-        let mut cf = cframe_from_json(&property(ctx, &part, "CFrame")?)?;
-        for i in 0..3 {
-            cf.position[i] += delta[i];
-        }
-        writes.push((part, cf));
-    }
-    for (part, cf) in writes {
-        store_frame(lua, ctx, &part, cf)?;
-    }
-    Ok(MultiValue::new())
-}
-fn model_move_to(
-    lua: &Lua,
-    ctx: &WorldRef,
-    id: &str,
-    args: MultiValue,
-    require_primary: bool,
-) -> mlua::Result<MultiValue> {
-    let args: Vec<Value> = args.into_iter().collect();
-    if args.len() != 1 {
-        return Err(err("PivotTo expects one CFrame"));
-    }
-    let target = cframe_arg(&args[0])?;
-    // The model pivot is the PrimaryPart transform when available; otherwise
-    // use the first available descendant BasePart, matching the minimal local
-    // representation without guessing a bounds pivot.
-    let primary = property(ctx, id, "PrimaryPart")
-        .ok()
-        .and_then(|v| v.get("$ref").and_then(Json::as_str).map(str::to_owned));
-    if require_primary && primary.is_none() {
-        return Err(err("model has no PrimaryPart"));
-    }
-    if let Some(primary) = primary.as_deref() {
-        if !is_basepart(ctx, primary) || !is_descendant_by_parent(ctx, primary, id) {
-            return Err(err("PrimaryPart must be inside the model"));
-        }
-    }
-    let source_id = primary
-        .or_else(|| {
-            descendant_ids(ctx, id)
-                .into_iter()
-                .skip(1)
-                .find(|part| world::is_a(ctx, part, "BasePart"))
-        })
-        .ok_or_else(|| err("model pivot is unavailable without a PrimaryPart or BasePart"))?;
-    let source = cframe_from_json(&property(ctx, &source_id, "CFrame")?)?;
-    let delta = compose(&target, &inverse(&source));
-    let mut writes = Vec::new();
-    for part in descendant_ids(ctx, id) {
-        if !is_basepart(ctx, &part) {
-            continue;
-        }
-        let old = cframe_from_json(&property(ctx, &part, "CFrame")?)?;
-        writes.push((part, compose(&delta, &old)));
-    }
-    for (part, cf) in writes {
-        store_frame(lua, ctx, &part, cf)?;
-    }
-    Ok(MultiValue::new())
-}
-fn model_pivot_to(
-    lua: &Lua,
-    ctx: &WorldRef,
-    id: &str,
-    args: MultiValue,
-) -> mlua::Result<MultiValue> {
-    model_move_to(lua, ctx, id, args, false)
-}
-fn model_set_primary_cframe(
-    lua: &Lua,
-    ctx: &WorldRef,
-    id: &str,
-    args: MultiValue,
-) -> mlua::Result<MultiValue> {
-    model_move_to(lua, ctx, id, args, true)
-}
-
-fn basepart_pivot_to(
-    lua: &Lua,
-    ctx: &WorldRef,
-    id: &str,
-    args: MultiValue,
-) -> mlua::Result<MultiValue> {
-    let args: Vec<Value> = args.into_iter().collect();
-    if args.len() != 1 {
-        return Err(err("PivotTo expects one CFrame"));
-    }
-    if !is_basepart(ctx, id) {
-        return Err(err("PivotTo requires a BasePart"));
-    }
-    let target = cframe_arg(&args[0])?;
-    store_frame(lua, ctx, id, target)?;
-    Ok(MultiValue::new())
-}
-
 fn set_anchored(lua: &Lua, ctx: &WorldRef, id: &str, value: Value) -> mlua::Result<bool> {
     if !is_basepart(ctx, id) {
         return Ok(false);
@@ -910,29 +784,7 @@ pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
         humanoid_set_state_enabled,
     );
     world::register_method(ctx, "Player", "Move", humanoid_move);
-    world::register_method(ctx, "Model", "TranslateBy", model_translate);
-    world::register_method(ctx, "Model", "PivotTo", model_pivot_to);
-    world::register_method(
-        ctx,
-        "Model",
-        "SetPrimaryPartCFrame",
-        model_set_primary_cframe,
-    );
-    for class_name in [
-        "Part",
-        "MeshPart",
-        "UnionOperation",
-        "WedgePart",
-        "CornerWedgePart",
-        "TrussPart",
-        "SpawnLocation",
-        "Seat",
-        "VehicleSeat",
-        "FlagStand",
-        "SkateboardPlatform",
-    ] {
-        world::register_method(ctx, class_name, "PivotTo", basepart_pivot_to);
-    }
+    pivots::install(ctx);
     world::register_setter(ctx, "Anchored", set_anchored);
     world::register_setter(ctx, "CFrame", set_cframe);
     world::register_setter(ctx, "Position", set_position);

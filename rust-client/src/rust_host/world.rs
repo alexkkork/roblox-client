@@ -22,6 +22,9 @@ use std::{
 
 #[path = "world_queries.rs"]
 mod world_queries;
+#[path = "world_pose_batch.rs"]
+mod world_pose_batch;
+pub(crate) use world_pose_batch::{apply_pose_batch, pose_events, PoseWrite};
 
 pub type WorldRef = Rc<RefCell<World>>;
 type InstanceHandleWaiters = Rc<RefCell<InstanceHandleWaitState>>;
@@ -1500,6 +1503,12 @@ pub fn sync_actor_fork_with_lua(
                     .flatten()
                     .or_else(|| before.get(id).and_then(|node| node_property(node, key)));
                 let new_value = get_property(actor_world, id, key).ok();
+                if key == world_pose_batch::EXPLICIT_PIVOT
+                    || (row.get("_pivot_cframe_only").and_then(Json::as_bool) == Some(true)
+                        && matches!(key, "Position" | "Orientation" | "Rotation"))
+                {
+                    continue;
+                }
                 if old_value != new_value {
                     emit_property_changed(lua, actor_world, id, key)?;
                     if key == "Parent" {
@@ -3414,6 +3423,7 @@ pub fn clone_instance(lua: &Lua, ctx: &WorldRef, root_id: &str) -> mlua::Result<
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone())),
         );
+        world_pose_batch::preserve_pivot_mode(&original, &mut properties);
         properties.remove("Name");
         properties.remove("Parent");
         for value in properties.values_mut() {

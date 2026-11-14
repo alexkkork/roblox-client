@@ -274,6 +274,50 @@ pub fn merge_actor_journal(
                 set_property(lua, root_world, actor_id, row)?;
                 report.applied += 1;
             }
+            "pose_batch" => {
+                let list = row
+                    .get("writes")
+                    .and_then(Json::as_array)
+                    .filter(|v| !v.is_empty() && v.len() <= 4096)
+                    .ok_or_else(|| error("Actor pose batch needs bounded writes"))?;
+                let cframe_only = row
+                    .get("cframe_only")
+                    .and_then(Json::as_bool)
+                    .ok_or_else(|| error("Actor pose batch needs an event mode"))?;
+                let mut writes = Vec::new();
+                let mut conflict = false;
+                for record in list {
+                    let id = record
+                        .get("id")
+                        .and_then(Json::as_str)
+                        .ok_or_else(|| error("Actor pose target needs an ID"))?;
+                    let fields = record
+                        .get("fields")
+                        .and_then(Json::as_object)
+                        .ok_or_else(|| error("Actor pose fields are missing"))?;
+                    let base = base_revision(record)?;
+                    conflict |= !source_node_matches(actor_world, root_world, id)
+                        || !revision_matches(root_world, id, base);
+                    writes.push(world::PoseWrite {
+                        id: id.into(),
+                        fields: fields.clone(),
+                    });
+                }
+                if conflict {
+                    for write in writes {
+                        for key in write.fields.keys() {
+                            clear_stale_override(actor_world, &write.id, key);
+                        }
+                    }
+                    report.conflicts.push("pose_batch:stale_target".into());
+                    continue;
+                }
+                let cursor = mutation_rows(root_world);
+                let changes = world::apply_pose_batch(root_world, &writes, cframe_only)?;
+                tag_new_root_mutations(root_world, cursor, actor_id)?;
+                world::pose_events(lua, root_world, changes)?;
+                report.applied += 1;
+            }
             "attribute" => {
                 let id = row
                     .get("id")

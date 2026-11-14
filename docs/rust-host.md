@@ -20,6 +20,12 @@ browser frontend use the same bounded host request/response protocol.
 with current-world updates, filters, hypothetical poses and shape growth.
 See [part collision queries](spatial-queries.md) for supported geometry and limits.
 
+[Model pivots and bounds](model-pivots.md) now use Rust as well. GetPivot,
+GetBoundingBox, GetExtentsSize and PivotTo account for primary-part offsets,
+automatic versus explicit model pivots, nested geometry and cached relative
+transforms. Authored moves commit before callbacks and merge atomically from
+Actor VMs.
+
 Actors keep separate Luau states and share the configured aggregate VM
 memory budget. Their remote request IDs are routed back to the issuing VM;
 unknown or mismatched responses do not complete a waiter. World metadata

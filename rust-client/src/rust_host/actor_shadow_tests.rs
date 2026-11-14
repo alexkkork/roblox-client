@@ -52,6 +52,87 @@ fn actor_instance(lua: &Lua, world: &WorldRef, id: &str) -> AnyUserData {
     }
 }
 
+fn prepare_pivot_model(root_lua: &Lua, root: &WorldRef, actor: &WorldRef) {
+    root_lua
+        .load(
+            r#"
+        local m=Instance.new("Model",workspace);m.Name="Mover"
+        local a=Instance.new("Part",m);a.Name="A";a.CFrame=CFrame.new(-2,0,0)
+        local b=Instance.new("Part",m);b.Name="B";b.CFrame=CFrame.new(2,0,0)
+        m.WorldPivot=CFrame.new()
+    "#,
+        )
+        .exec()
+        .unwrap();
+    actor.borrow_mut().sync_actor_fork(&root.borrow());
+    root.borrow_mut().effects.clear();
+    actor.borrow_mut().effects.clear();
+}
+
+#[test]
+fn actor_model_pivots_merge_as_atomic_batches_with_matching_revision_fences() {
+    let (root_lua, root, actor_lua, actor) = setup_worlds();
+    prepare_pivot_model(&root_lua, &root, &actor);
+    actor_lua
+        .load(
+            r#"
+        workspace.Mover:PivotTo(CFrame.new(10,0,0))
+        workspace.Mover:PivotTo(CFrame.new(20,0,0))
+    "#,
+        )
+        .exec()
+        .unwrap();
+    let journal = actor_journal(&actor);
+    assert_eq!(journal.len(), 2);
+    assert!(journal.iter().all(|row| row["kind"] == "pose_batch"));
+    let report = merge_actor_journal(&root_lua, &root, &actor, "worker", &journal).unwrap();
+    assert!(report.conflicts.is_empty(), "{:?}", report.conflicts);
+    assert_eq!(report.applied, 2);
+    root_lua
+        .load(
+            r#"
+        local m=workspace.Mover
+        assert(m.A.Position.X==18 and m.B.Position.X==22 and m:GetPivot().X==20)
+    "#,
+        )
+        .exec()
+        .unwrap();
+    assert!(root.borrow().effects["mutations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|row| row["kind"] == "set"
+            && row["actor_origin"] == "worker"
+            && row["_pivot_cframe_only"] == true));
+}
+
+#[test]
+fn stale_actor_pivot_rejects_the_entire_batch_without_moving_other_parts() {
+    let (root_lua, root, actor_lua, actor) = setup_worlds();
+    prepare_pivot_model(&root_lua, &root, &actor);
+    actor_lua
+        .load("workspace.Mover:PivotTo(CFrame.new(10,0,0))")
+        .exec()
+        .unwrap();
+    root_lua
+        .load("workspace.Mover.A.CFrame=CFrame.new(99,0,0)")
+        .exec()
+        .unwrap();
+    let journal = actor_journal(&actor);
+    let report = merge_actor_journal(&root_lua, &root, &actor, "worker", &journal).unwrap();
+    assert_eq!(report.applied, 0);
+    assert_eq!(report.conflicts.len(), 1);
+    root_lua
+        .load(
+            r#"
+        local m=workspace.Mover
+        assert(m.A.Position.X==99 and m.B.Position.X==2 and m:GetPivot().X==0)
+    "#,
+        )
+        .exec()
+        .unwrap();
+}
+
 #[test]
 fn actor_properties_attributes_and_tags_merge_through_root_setters() {
     let (root_lua, root_world, actor_lua, actor_world) = setup_worlds();
