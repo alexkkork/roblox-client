@@ -2,10 +2,8 @@
 //! Uses the same real local-font backend as asynchronous TextService requests.
 //! Cache entries contain only requests and two numbers, never loaded font data.
 
-use crate::engine_services::TextRequest;
-#[cfg(target_os = "macos")]
-use crate::engine_services::TextServiceBackend;
-use std::{cell::RefCell, collections::VecDeque};
+use crate::engine_services::{TextRequest, TextServiceBackend};
+use std::{cell::RefCell, collections::VecDeque, rc::Rc, sync::Arc};
 
 const MAX_REQUEST: usize = 64 * 1024;
 const MAX_CACHE_BYTES: usize = 512 * 1024;
@@ -42,41 +40,74 @@ impl Measurements {
     }
 }
 
+/// One bounded measurement cache per runtime, shared with its synchronous
+/// Actor work. The provider is also used by that runtime's async text queue.
+pub(crate) struct Context {
+    backend: Option<Arc<dyn TextServiceBackend>>,
+    measurements: RefCell<Measurements>,
+}
+
+impl Context {
+    pub(crate) fn new(backend: Option<Arc<dyn TextServiceBackend>>) -> Rc<Self> {
+        Rc::new(Self {
+            backend,
+            measurements: RefCell::new(Measurements::default()),
+        })
+    }
+}
+
 thread_local! {
-    // Each VM owner has an independent bounded cache; Actor threads do not
-    // share mutable font state, and it is dropped with the owner thread.
-    static MEASUREMENTS: RefCell<Measurements> = RefCell::new(Measurements::default());
+    static CURRENT: RefCell<Option<Rc<Context>>> = const { RefCell::new(None) };
+    static DEFAULT: Rc<Context> = Context::new(Some(Arc::new(
+        crate::engine_services::local_text::LocalTextBackend::default()
+    )));
+}
+
+pub(crate) struct Scope(Option<Rc<Context>>);
+impl Drop for Scope {
+    fn drop(&mut self) {
+        CURRENT.with(|current| {
+            current.replace(self.0.take());
+        });
+    }
+}
+
+pub(crate) fn enter(context: &Rc<Context>) -> Scope {
+    Scope(CURRENT.with(|current| current.replace(Some(context.clone()))))
 }
 
 pub(crate) fn measure(raw: &[u8]) -> Result<[f64; 2], String> {
+    if raw.is_empty() || raw.len() > MAX_REQUEST {
+        return Err("Invalid text measurement request".into());
+    }
     let payload = serde_json::from_slice(raw).map_err(|_| "Invalid text measurement request")?;
     let request = TextRequest::parse(&payload).map_err(str::to_owned)?;
     if !matches!(request, TextRequest::Bounds { .. }) {
         return Err("Text measurement requires a bounds request".into());
     }
-    if let Some(value) = MEASUREMENTS.with(|cache| cache.borrow_mut().get(raw)) {
+    let context = CURRENT
+        .with(|current| current.borrow().clone())
+        .unwrap_or_else(|| DEFAULT.with(Clone::clone));
+    if let Some(value) = context.measurements.borrow_mut().get(raw) {
         return Ok(value);
     }
-    #[cfg(target_os = "macos")]
+    let backend = context
+        .backend
+        .as_ref()
+        .ok_or("A local font backend is not configured for this runtime")?;
+    let value = backend.handle(&request)?;
+    let [Some(width), Some(height)] = [value[0].as_f64(), value[1].as_f64()] else {
+        return Err("Invalid measured text bounds".into());
+    };
+    let extent = [width, height];
+    if extent
+        .iter()
+        .any(|v| !v.is_finite() || !(0.0..=4_194_304.0).contains(v))
     {
-        let value =
-            crate::engine_services::local_text::LocalTextBackend::default().handle(&request)?;
-        let extent = [value[0].as_f64(), value[1].as_f64()];
-        let [Some(width), Some(height)] = extent else {
-            return Err("Invalid measured text bounds".into());
-        };
-        let extent = [width, height];
-        if extent
-            .iter()
-            .any(|v| !v.is_finite() || !(0.0..=4_194_304.0).contains(v))
-        {
-            return Err("Invalid measured text bounds".into());
-        }
-        MEASUREMENTS.with(|cache| cache.borrow_mut().insert(raw, extent));
-        Ok(extent)
+        return Err("Invalid measured text bounds".into());
     }
-    #[cfg(not(target_os = "macos"))]
-    Err("Local text measurement backend is unavailable on this platform".into())
+    context.measurements.borrow_mut().insert(raw, extent);
+    Ok(extent)
 }
 
 #[cfg(not(feature = "rust-host"))]

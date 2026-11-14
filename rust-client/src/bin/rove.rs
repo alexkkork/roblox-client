@@ -42,7 +42,7 @@ use std::{
 
 const SNAPSHOT_LIMIT: usize = 8 * 1024 * 1024;
 const SOURCE_LIMIT: usize = 100 * 1024 * 1024;
-const USAGE: &str = "rove run --snapshot FILE --script FILE [--deltas JSONL] [--lua-memory-mib 32] [--timeout-seconds 60] [--hold-ms 0] [--json]\nrove replay --packets FILE --script FILE [--json]\nrove replay-stream --packets FILE --script FILE [--packet-interval-ms 0] [--json]\nrove repl --snapshot FILE [--lua-memory-mib 32]\nrove console --snapshot FILE --socket PATH --lease-root PATH [--lua-memory-mib 32]\nrove serve --snapshot FILE [--port 5467] [--socket PATH --lease-root PATH] [--ui-root PATH] [--content-root PATH] [--script FILE] [--serve-seconds 0]\nrove submit --socket PATH --script FILE\nrove status --socket PATH --job-id ID\nrove leave --socket PATH\nrove snapshot --snapshot FILE [--deltas JSONL]\nrove auth [--credential-file FILE]\nrove join (--place-id ID [--job-id UUID] | --private-link-file FILE | --owned-private-server-file FILE) [--credential-file FILE] [--transport-seconds 1..30 | --session-seconds 1..3600 [--physics] [--lightweight] [--script FILE [--lua-memory-mib 32]]]\nSession mode owns live reception in Rust; --script runs authored Luau against ordered received updates. The selected engine host embeds the official Luau VM; --physics enables own-character gravity and movement.\n--lightweight omits received visual/audio asset properties (reads report unavailable) and uses a 1 MiB cold-property cache backed by a private temporary file; physics and gameplay state remain.\nThe Lua memory limit is an allocator cap, not a total-process RAM cap.";
+const USAGE: &str = "rove run --snapshot FILE --script FILE [--deltas JSONL] [--lua-memory-mib 32] [--timeout-seconds 60] [--hold-ms 0] [--json]\nrove replay --packets FILE --script FILE [--json]\nrove replay-stream --packets FILE --script FILE [--packet-interval-ms 0] [--json]\nrove repl --snapshot FILE [--lua-memory-mib 32]\nrove console --snapshot FILE --socket PATH --lease-root PATH [--lua-memory-mib 32]\nrove serve --snapshot FILE [--port 5467] [--socket PATH --lease-root PATH] [--ui-root PATH] [--content-root PATH] [--script FILE] [--serve-seconds 0]\nrove submit --socket PATH --script FILE\nrove status --socket PATH --job-id ID\nrove leave --socket PATH\nrove snapshot --snapshot FILE [--deltas JSONL]\nrove auth [--credential-file FILE]\nrove join (--place-id ID [--job-id UUID] | --private-link-file FILE | --owned-private-server-file FILE) [--credential-file FILE] [--transport-seconds 1..30 | --session-seconds 1..3600 [--physics] [--lightweight] [--script FILE [--lua-memory-mib 32]]]\nSession mode owns live reception in Rust; --script runs authored Luau against ordered received updates. The selected engine host embeds the official Luau VM; --physics enables own-character gravity and movement.\n--lightweight omits received visual/audio asset properties (reads report unavailable) and uses a 1 MiB cold-property cache backed by a private temporary file; physics and gameplay state remain.\nLocal VM modes accept --content-root PATH for font files (otherwise ROBLOX_CONTENT_DIR or the installed Roblox content directory).\nThe Lua memory limit is an allocator cap, not a total-process RAM cap.";
 
 // json! borrows its inputs, so an existing Value or String gets cloned.
 // move the big inputs in ourselves so we do not keep two copies.
@@ -230,11 +230,19 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
         return Err("serve needs both --socket and --lease-root when either is provided".into());
     }
     if options.mode != "serve"
-        && ["--ui-root", "--content-root", "--port", "--serve-seconds"]
+        && ["--ui-root", "--port", "--serve-seconds"]
             .iter()
             .any(|key| seen.contains(*key))
     {
         return Err("UI options require serve mode".into());
+    }
+    if options.content_root.is_some()
+        && !matches!(
+            options.mode.as_str(),
+            "run" | "replay" | "replay-stream" | "world-replay" | "repl" | "console" | "serve"
+        )
+    {
+        return Err("--content-root requires a local VM mode".into());
     }
     if options.serve_seconds > 86400 {
         return Err("serve duration must be 0..86400 seconds".into());
@@ -433,7 +441,7 @@ fn emit_output(response: &Value, quiet: bool) -> Result<(), String> {
 
 fn run(options: &Options, snapshot: Value) -> Result<Value, String> {
     let started = Instant::now();
-    let mut driver = Driver::new(snapshot, options.memory)?;
+    let mut driver = Driver::with_text_backend(snapshot, options.memory, text_backend(options))?;
     for_deltas(options.deltas.as_deref(), |delta| {
         let result = driver.call(update_command(delta, 5))?;
         successful(&result)?;
@@ -561,7 +569,12 @@ fn replay_stream(options: &Options) -> Result<Value, String> {
             );
             compacted_nodes += compact_snapshot(&mut snapshot, &view)?;
             projection = Some(context);
-            let mut vm = Driver::new_with_shared_world(snapshot, options.memory, &view)?;
+            let mut vm = Driver::with_text_backend_and_shared_world(
+                snapshot,
+                options.memory,
+                text_backend(options),
+                &view,
+            )?;
             let execution = vm.call(source_command(
                 source.take().ok_or("script already started")?,
                 1000,
@@ -679,7 +692,7 @@ fn finish_job(
 fn console(options: &Options, snapshot: Value) -> Result<Value, String> {
     let _lease = SessionLease::acquire(options.lease_root.as_ref().unwrap())?;
     let mut listener = ScriptConsole::bind(options.socket.as_ref().unwrap(), None)?;
-    let mut driver = Driver::new(snapshot, options.memory)?;
+    let mut driver = Driver::with_text_backend(snapshot, options.memory, text_backend(options))?;
     for_deltas(options.deltas.as_deref(), |delta| {
         successful(&driver.call(update_command(delta, 10))?)
     })?;
@@ -755,28 +768,21 @@ fn default_ui_root() -> Option<PathBuf> {
         .find(|path| path.join("local-session.html").is_file())
 }
 
-fn default_content_root() -> Option<PathBuf> {
-    #[cfg(target_os = "macos")]
-    {
-        let path = PathBuf::from("/Applications/Roblox.app/Contents/Resources/content");
-        path.is_dir().then_some(path)
-    }
-    #[cfg(windows)]
-    {
-        let versions = PathBuf::from(env::var_os("LOCALAPPDATA")?).join("Roblox/Versions");
-        let mut candidates: Vec<_> = fs::read_dir(versions)
-            .ok()?
-            .filter_map(Result::ok)
-            .map(|entry| entry.path().join("content"))
-            .filter(|path| path.is_dir())
-            .collect();
-        candidates.sort_by_key(|path| fs::metadata(path).and_then(|m| m.modified()).ok());
-        candidates.pop()
-    }
-    #[cfg(not(any(target_os = "macos", windows)))]
-    {
-        None
-    }
+fn content_root(options: &Options) -> Option<PathBuf> {
+    options
+        .content_root
+        .clone()
+        .or_else(headless_luau::engine_services::local_text::default_content_root)
+}
+
+fn text_backend(
+    options: &Options,
+) -> Option<Arc<dyn headless_luau::engine_services::TextServiceBackend>> {
+    Some(Arc::new(
+        headless_luau::engine_services::local_text::LocalTextBackend::new(
+            content_root(options).unwrap_or_default(),
+        ),
+    ))
 }
 
 #[cfg(any(unix, windows))]
@@ -791,21 +797,8 @@ fn serve(options: &Options, snapshot: Value) -> Result<Value, String> {
         .as_ref()
         .map(|path| ScriptConsole::bind(path, None))
         .transpose()?;
-    let content = options
-        .content_root
-        .clone()
-        .or_else(|| env::var_os("ROBLOX_CONTENT_DIR").map(PathBuf::from))
-        .or_else(default_content_root);
-    #[cfg(target_os = "macos")]
-    let backend = Some(Arc::new(
-        headless_luau::engine_services::local_text::LocalTextBackend::new(
-            content.clone().unwrap_or_default(),
-        ),
-    )
-        as Arc<dyn headless_luau::engine_services::TextServiceBackend>);
-    #[cfg(not(target_os = "macos"))]
-    let backend = None;
-    let runtime = Driver::with_text_backend(snapshot, options.memory, backend)?;
+    let content = content_root(options);
+    let runtime = Driver::with_text_backend(snapshot, options.memory, text_backend(options))?;
     let mut session = SessionUi::new(runtime)?;
     if let Some(content) = content {
         session.set_content_root(content)?;
@@ -905,7 +898,7 @@ fn print_job(response: &Value) -> Result<(), String> {
 }
 
 fn repl(options: &Options, snapshot: Value) -> Result<Value, String> {
-    let mut driver = Driver::new(snapshot, options.memory)?;
+    let mut driver = Driver::with_text_backend(snapshot, options.memory, text_backend(options))?;
     for_deltas(options.deltas.as_deref(), |delta| {
         successful(&driver.call(update_command(delta, 10))?)
     })?;

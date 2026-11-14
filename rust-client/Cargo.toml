@@ -31,6 +31,10 @@ ureq = "=2.9.7"
 tungstenite = { version = "=0.29.0", features = ["native-tls"] }
 url = "=2.5.8"
 unicode-segmentation = "=1.13.3"
+unicode-bidi = "=0.3.18"
+unicode-linebreak = "=0.1.5"
+unicode-script = "=0.5.9"
+harfrust = "=0.16.0"
 libc = "=0.2.191"
 tokio = { version = "=1.50.0", features = ["rt", "net", "time"] }
 
@@ -39,10 +43,6 @@ default = ["rust-host"]
 rust-host = ["dep:mlua", "dep:mlua-sys", "dep:rove-runtime-sys", "dep:sha3", "dep:aes", "dep:aes-gcm", "dep:cbc", "dep:cfb-mode", "dep:ctr", "dep:ecb", "dep:ofb"]
 allocator-mimalloc = ["dep:mimalloc"]
 allocator-mimalloc-native = ["allocator-mimalloc", "mimalloc/override"]
-
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2-core-text = { version = "=0.3.2", default-features = false, features = ["CTFont", "CTFontDescriptor", "CTFontManager", "CTLine", "CTStringAttributes"] }
-objc2-core-foundation = { version = "=0.3.2", default-features = false, features = ["CFArray", "CFAttributedString", "CFCGTypes", "CFDictionary", "CFString", "CFURL"] }
 
 [profile.release]
 lto = "thin"

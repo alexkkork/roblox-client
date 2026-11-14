@@ -22,6 +22,9 @@ foreach ($folder in @('ui', 'examples')) {
 }
 New-Item -ItemType Directory -Force (Join-Path $package 'tests/fixtures') | Out-Null
 Copy-Item 'tests/fixtures/world_snapshot.json' (Join-Path $package 'tests/fixtures') -Force
+$fonts = Join-Path $package 'tests/fixtures/fonts'
+if (Test-Path $fonts) { Remove-Item $fonts -Recurse -Force }
+Copy-Item 'tests/fixtures/fonts' $fonts -Recurse
 Copy-Item 'docs/windows.md' (Join-Path $package 'README.md') -Force
 Copy-Item 'THIRD_PARTY.md' $package -Force
 $licenses = Join-Path $package 'licenses'

@@ -28,10 +28,32 @@ changes emit the same service and loaded-state signals as the old host.
 | Events, callbacks, scripts and Actors | `signals.rs`, `lifecycle.rs`, `actors.rs` |
 | Movement, spatial queries, input and playback | `movement.rs`, `geometry.rs`, `input.rs`, `playback.rs` |
 | GUI and Drawing | `gui.rs`, `drawing.rs` |
+| Portable font shaping and text layout | `rust-client/src/engine_services/local_text.rs`, `text_shaping.rs` |
 | File, console and network bindings | `source_helpers.rs`, `host_io_bindings.rs` |
 | Official VM compilation and ABI checks | `rust-runtime-sys` |
 
 All short module paths in this table are under `rust-client/src/rust_host`.
+
+TextService and GUI text measurement use HarfRust and the selected content
+directory on every platform. Synchronous GUI layout and asynchronous service
+requests share one runtime's font provider, with separate measurement caches
+for separate runtimes. `TextBounds` and `TextFits` account for wrapping, padding,
+UIScale and bounded TextScaled fitting; automatic sizing uses the same font
+advances. This measures text; it does not rasterize glyphs.
+
+The backend uses Unicode bidi, script itemization and line-break opportunities,
+and keeps graphemes together during emergency wrapping. It retains at most eight
+font faces and 2 MiB of cached font file bytes; synchronous measurement entries
+are capped at 128 entries / 512 KiB. A request accepts at most 4 KiB of text,
+128 rich-text runs, 16 font variants and 8 MiB of font file data, with bounded
+shaping work. These are component limits, not total-process RAM limits.
+Missing families/faces/glyphs return errors. Drawing's separate text approximation
+and full Roblox rendering parity remain outside this change.
+
+`ROBLOX_CONTENT_DIR` selects the content directory. The local CLI modes also
+accept `--content-root PATH`, which takes precedence. The portable integration
+tests and `examples/text-service-smoke.luau` use the OFL-licensed Noto fixtures
+under `tests/fixtures/fonts` and need no Roblox installation.
 
 ## remaining parity work
 

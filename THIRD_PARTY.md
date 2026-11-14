@@ -10,7 +10,10 @@ the original notices stay with the files:
 - `runtime/vendor`: nlohmann json and the archived core-scripts fixture, with their licences and provenance.
 - `vendor/roblox-player-scripts-745`: pinned client-tracker sources and bytecode fixtures. `provenance.json` records where each source came from; `bytecode-v6-manifest.json` records the compiled fixtures.
 - `ui/assets`: asset origins are recorded in `provenance.json`. the viewer bundles retain their dependency notices.
+- `tests/fixtures/fonts`: noto sans and noto naskh arabic test fonts, sil open font license 1.1. `OFL.txt` and `README.md` contain the license, source paths and file hashes. the fixture alias is only for tests; these are not roblox fonts.
 
 the cargo and npm lockfiles pin the other dependencies. this folder doesn't change the licences or ownership of upstream files.
 
 the rust host uses rustcrypto's aes, block modes, aes-gcm, and hash implementations on every platform. their cargo packages retain their mit/apache-2.0 licences; no separately installed openssl provider is used for these luau helpers.
+
+portable font measurement uses harfrust (mit), unicode-bidi and unicode-script (mit/apache-2.0), unicode-linebreak (apache-2.0), and unicode-segmentation (mit/apache-2.0). versions are pinned in `rust-client/Cargo.lock`; the windows package includes the dependency notices.

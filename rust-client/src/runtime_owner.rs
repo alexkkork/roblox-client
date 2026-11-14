@@ -21,6 +21,7 @@ pub struct Runtime {
     events: EventHistory,
     diagnostics: Value,
     text_backend: Option<Arc<dyn TextServiceBackend>>,
+    text_measurements: std::rc::Rc<crate::engine_text_measure::Context>,
     text_service: Option<TextServiceQueue>,
     local_errors: VecDeque<Value>,
     remote_client_replies: VecDeque<Value>,
@@ -51,13 +52,10 @@ impl Runtime {
         memory: u32,
         world: Option<&SharedProjectedWorldView>,
     ) -> Result<Self, String> {
-        #[cfg(target_os = "macos")]
         let backend = Some(
             Arc::new(crate::engine_services::local_text::LocalTextBackend::default())
                 as Arc<dyn TextServiceBackend>,
         );
-        #[cfg(not(target_os = "macos"))]
-        let backend = None;
         Self::initialize(snapshot, memory, backend, world)
     }
     pub fn with_text_backend(
@@ -66,6 +64,14 @@ impl Runtime {
         text_backend: Option<Arc<dyn TextServiceBackend>>,
     ) -> Result<Self, String> {
         Self::initialize(snapshot, memory, text_backend, None)
+    }
+    pub fn with_text_backend_and_shared_world(
+        snapshot: Value,
+        memory: u32,
+        text_backend: Option<Arc<dyn TextServiceBackend>>,
+        world: &SharedProjectedWorldView,
+    ) -> Result<Self, String> {
+        Self::initialize(snapshot, memory, text_backend, Some(world))
     }
     fn initialize(
         snapshot: Value,
@@ -76,6 +82,7 @@ impl Runtime {
         if !(8..=512).contains(&memory) {
             return Err("Lua memory limit must be 8..512 MiB".into());
         }
+        let text_measurements = crate::engine_text_measure::Context::new(text_backend.clone());
         let mut driver = Self {
             vm: Some(Session::new()),
             buffer: Vec::new(),
@@ -87,6 +94,7 @@ impl Runtime {
             events: EventHistory::default(),
             diagnostics: json!({}),
             text_backend,
+            text_measurements,
             text_service: None,
             local_errors: VecDeque::new(),
             remote_client_replies: VecDeque::new(),
@@ -132,6 +140,7 @@ impl Runtime {
         if self.vm.is_none() {
             return Err("Runtime is closed".into());
         }
+        let _text_scope = crate::engine_text_measure::enter(&self.text_measurements);
         let operation = command
             .get("op")
             .and_then(Value::as_str)

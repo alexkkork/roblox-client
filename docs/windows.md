@@ -23,6 +23,20 @@ in the extracted package folder:
 
 open the local url printed by `serve`. keep the `ui` folder beside `rove.exe`; it also accepts `--ui-root PATH`. these commands use a local fixture and do not join a live game.
 
+## text and fonts
+
+font measurement now runs in rust on windows too. it reads installed font files for textservice, gui automatic sizing, and the read-only `TextBounds` and `TextFits` properties. wrapping preserves unicode graphemes; shaping handles kerning, combining marks, and joined scripts.
+
+the client looks for the newest content directory under `%LOCALAPPDATA%\Roblox\Versions`. set `ROBLOX_CONTENT_DIR` or pass `--content-root PATH` to the local run, replay, repl, console, or serve commands to select a different content directory. a missing font or glyph gives an explicit error; there is no silent system-font substitution or font download.
+
+the package also has open noto fonts for an offline check, without a roblox installation:
+
+```powershell
+.\rove.exe run --snapshot tests/fixtures/world_snapshot.json --script examples/text-service-smoke.luau --content-root tests/fixtures --json
+```
+
+that command's sourcesans alias is a test fixture, not a production font replacement. measurements are not a pixel-perfect roblox rendering claim. each runtime retains up to 2 mib of cached font file data and 512 kib of measurement entries; shaping metadata and active requests use additional memory.
+
 ## private files and console
 
 the console uses a random token and a loopback-only tcp port. its endpoint file is private and disappears when the process closes. account files and their directory must allow access only to your windows user, system, and administrators. create a dedicated directory before saving any credentials:
@@ -53,4 +67,4 @@ in a second terminal:
 
 windows ram readings use the process working set and its recorded peak. the lua memory option limits the vm allocator, not total ram. cold-property paging uses a private temporary file with delete-on-close.
 
-the native windows checks cover the vm, local scripting, crypto, memory readings, console authentication, file permissions, and browser startup. they don't prove live roblox server acceptance or full engine compatibility. text measurement through the installed roblox fonts still has a macos-only backend; unsupported operations remain explicit errors.
+the native windows checks cover the vm, local scripting, crypto, memory readings, console authentication, file permissions, browser startup, and font-backed text layout. they don't prove live roblox server acceptance or full engine compatibility. unsupported operations remain explicit errors.

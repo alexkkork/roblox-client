@@ -441,6 +441,15 @@ fn read_udim2(ctx: &WorldRef, id: &str, key: &str) -> Option<([f64; 2], [f64; 2]
     udim2(&prop(ctx, id, key, Json::Null))
 }
 fn text_measure(ctx: &WorldRef, id: &str, width: f64) -> Result<[f64; 2], String> {
+    text_measure_at_size(ctx, id, width, None)
+}
+
+fn text_measure_at_size(
+    ctx: &WorldRef,
+    id: &str,
+    width: f64,
+    size: Option<f64>,
+) -> Result<[f64; 2], String> {
     let text = prop(ctx, id, "Text", Json::Null)
         .as_str()
         .map(ToOwned::to_owned)
@@ -455,14 +464,117 @@ fn text_measure(ctx: &WorldRef, id: &str, width: f64) -> Result<[f64; 2], String
         .get("$font")
         .cloned()
         .ok_or("text font unavailable")?;
+    let base_size = number(&prop(ctx, id, "TextSize", json!(14)), 14.);
     let mut request = json!({"request_id":1,"kind":"bounds","text":text,"font":font,
-        "size":number(&prop(ctx,id,"TextSize",json!(14)),14.),"width":width,
+        "size":base_size,"width":width,"layout_scale":size.unwrap_or(base_size) / base_size,
         "line_height":number(&prop(ctx,id,"LineHeight",json!(1)),1.)});
     if rich {
         request["runs"] = runs;
     }
     let raw = serde_json::to_vec(&request).map_err(|_| "invalid text measure request")?;
     crate::engine_text_measure::measure(&raw)
+}
+
+fn is_text_object(ctx: &WorldRef, id: &str) -> bool {
+    matches!(
+        class(ctx, id).as_str(),
+        "TextLabel" | "TextButton" | "TextBox"
+    )
+}
+
+fn measured_text_box(ctx: &WorldRef, id: &str) -> Result<([f64; 2], [f64; 2]), String> {
+    let area = box_for(
+        ctx,
+        id,
+        &display(ctx),
+        &mut HashMap::new(),
+        &mut HashSet::new(),
+        0,
+    )?;
+    let scale = area.scale.max(f64::MIN_POSITIVE);
+    let mut available = [area.w.max(0.0), area.h.max(0.0)];
+    if let Some(padding) = component(ctx, id, "UIPadding") {
+        for (axis, names) in [
+            (0, ["PaddingLeft", "PaddingRight"]),
+            (1, ["PaddingTop", "PaddingBottom"]),
+        ] {
+            let extent = available[axis];
+            for name in names {
+                available[axis] -= udim(
+                    &prop(ctx, &padding, name, json!({"$udim":[0,0]})),
+                    extent,
+                    scale,
+                )
+                .unwrap_or(0.0);
+            }
+            available[axis] = available[axis].max(0.0);
+        }
+    }
+    let scaled = flag(&prop(ctx, id, "TextScaled", json!(false)), false);
+    let wrapped = scaled || flag(&prop(ctx, id, "TextWrapped", json!(false)), false);
+    let width = if wrapped {
+        (available[0] / scale).clamp(1.0, 32768.0)
+    } else {
+        0.0
+    };
+    let (mut minimum, mut maximum) = (1.0_f64, if scaled { 100.0_f64 } else { 1000.0_f64 });
+    if let Some(constraint) = component(ctx, id, "UITextSizeConstraint") {
+        minimum = number(&prop(ctx, &constraint, "MinTextSize", json!(1)), 1.0).clamp(1.0, 1000.0);
+        maximum = number(&prop(ctx, &constraint, "MaxTextSize", json!(100)), 100.0)
+            .clamp(minimum, 1000.0);
+    }
+    let mut measured = if scaled {
+        let mut low = minimum.ceil() as u32;
+        let mut high = maximum.floor().max(f64::from(low)) as u32;
+        let mut best = text_measure_at_size(ctx, id, width, Some(f64::from(low)))?;
+        while low <= high {
+            let middle = low + (high - low) / 2;
+            let bounds = text_measure_at_size(ctx, id, width, Some(f64::from(middle)))?;
+            if bounds[0] * scale <= available[0] && bounds[1] * scale <= available[1] {
+                best = bounds;
+                low = middle + 1;
+            } else {
+                high = middle.saturating_sub(1);
+            }
+        }
+        best
+    } else {
+        let size = number(&prop(ctx, id, "TextSize", json!(14)), 14.).clamp(minimum, maximum);
+        text_measure_at_size(ctx, id, width, Some(size))?
+    };
+    measured[0] *= area.scale;
+    measured[1] *= area.scale;
+    Ok((measured, available))
+}
+
+fn text_bounds(lua: &mlua::Lua, ctx: &WorldRef, id: &str) -> mlua::Result<Option<mlua::Value>> {
+    if !is_text_object(ctx, id) {
+        return Ok(None);
+    }
+    let (bounds, _) = measured_text_box(ctx, id).map_err(err)?;
+    super::values::from_json(lua, &json!({"$vector2":bounds})).map(Some)
+}
+
+fn text_fits(_: &mlua::Lua, ctx: &WorldRef, id: &str) -> mlua::Result<Option<mlua::Value>> {
+    if !is_text_object(ctx, id) {
+        return Ok(None);
+    }
+    let (bounds, available) = measured_text_box(ctx, id).map_err(err)?;
+    Ok(Some(mlua::Value::Boolean(
+        bounds[0] <= available[0] && bounds[1] <= available[1],
+    )))
+}
+
+fn readonly_text_metric(
+    _: &mlua::Lua,
+    ctx: &WorldRef,
+    id: &str,
+    _: mlua::Value,
+) -> mlua::Result<bool> {
+    if is_text_object(ctx, id) {
+        return Err(err("TextBounds and TextFits are read-only"));
+    }
+    Ok(false)
 }
 
 fn box_for(
@@ -2205,6 +2317,10 @@ fn project_parts(ctx: &WorldRef, ids: &[String], frame: &mut Json, bytes: &mut u
 
 /// Create GUI/engine bindings that are backed by data in the current snapshot.
 pub fn install(lua: &mlua::Lua, ctx: &WorldRef) -> mlua::Result<()> {
+    world::register_getter(ctx, "TextBounds", text_bounds);
+    world::register_getter(ctx, "TextFits", text_fits);
+    world::register_setter(ctx, "TextBounds", readonly_text_metric);
+    world::register_setter(ctx, "TextFits", readonly_text_metric);
     world::register_getter(ctx, "AbsoluteSize", absolute_size);
     world::register_getter(ctx, "AbsolutePosition", absolute_position);
     world::register_getter(ctx, "AbsoluteRotation", absolute_rotation);

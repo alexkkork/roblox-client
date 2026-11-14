@@ -1,30 +1,21 @@
-//! Offline Roblox font-family lookup and CoreText shaping backend.
+//! Offline font lookup and portable Rust text shaping.
 //!
-//! The backend reads only the installed Roblox content directory. It does not
-//! follow asset IDs over HTTP and never guesses a missing face or text width.
-//! Widths are measured through CoreText, which uses the installed font's real
-//! glyph advances and shaping. Height retains the existing TextService rule:
-//! one line contributes the largest effective run size on that line.
+//! Only requested faces under the local content root are opened. Font bytes
+//! and the number of retained faces are bounded; missing assets remain errors.
 
 use crate::engine_services::{
     decode_font_family, select_font_face, validate_font_bytes, FontFace, TextRequest,
     TextServiceBackend, MAX_FONT_BYTES, MAX_FONT_FAMILY_BYTES,
 };
-use objc2_core_foundation::{
-    CFAttributedString, CFDictionary, CFDictionaryKeyCallBacks, CFDictionaryValueCallBacks,
-    CFMutableDictionary, CFString, CFStringBuiltInEncodings, CFURL,
-};
-use objc2_core_text::{
-    kCTFontAttributeName, CTFont, CTFontDescriptor, CTFontManagerCreateFontDescriptorsFromURL,
-    CTLine,
-};
+use harfrust::Font;
 use serde_json::{json, Value};
 use std::{
-    collections::HashMap,
-    ffi::CString,
-    fs,
-    os::raw::c_void,
+    collections::{HashMap, VecDeque},
+    fs::{self, File},
+    io::Read,
     path::{Path, PathBuf},
+    sync::Mutex,
+    time::SystemTime,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -32,52 +23,157 @@ const MAX_TEXT_BYTES: usize = 4096;
 const MAX_SHAPING_WORK: usize = 2_000_000;
 const MAX_RUNS: usize = 128;
 const MAX_VARIANTS: usize = 16;
+const MAX_CACHED_FONT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_CACHED_FONTS: usize = 8;
+const MAX_REQUEST_FONT_BYTES: usize = 8 * 1024 * 1024;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
+struct LoadedFont {
+    font: Font,
+    bytes: usize,
+}
+
+#[derive(Clone)]
 struct FontSpec {
     family: String,
     weight: u16,
     italic: bool,
     size: f64,
-    path: PathBuf,
+    loaded: LoadedFont,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct Run {
     start: usize,
     end: usize,
     spec: FontSpec,
 }
 
-/// Uses files from the local Roblox app content tree (or the explicit content
-/// directory override). All file paths are canonicalized and constrained to
-/// that root before opening.
+struct CachedFont {
+    path: PathBuf,
+    modified: Option<SystemTime>,
+    loaded: LoadedFont,
+}
+
+#[derive(Default)]
+struct FontCache {
+    entries: VecDeque<CachedFont>,
+    bytes: usize,
+}
+
+impl FontCache {
+    fn get(&mut self, path: &Path, size: u64, modified: Option<SystemTime>) -> Option<LoadedFont> {
+        let index = self.entries.iter().position(|e| e.path == path)?;
+        let entry = self.entries.remove(index)?;
+        self.bytes -= entry.loaded.bytes;
+        if modified.is_none() || entry.modified != modified || entry.loaded.bytes as u64 != size {
+            return None;
+        }
+        let loaded = entry.loaded.clone();
+        self.bytes += entry.loaded.bytes;
+        self.entries.push_back(entry);
+        Some(loaded)
+    }
+
+    fn insert(&mut self, entry: CachedFont) {
+        if entry.loaded.bytes > MAX_CACHED_FONT_BYTES {
+            return;
+        }
+        if let Some(index) = self.entries.iter().position(|e| e.path == entry.path) {
+            self.bytes -= self.entries.remove(index).unwrap().loaded.bytes;
+        }
+        while self.entries.len() >= MAX_CACHED_FONTS
+            || self.bytes + entry.loaded.bytes > MAX_CACHED_FONT_BYTES
+        {
+            let Some(old) = self.entries.pop_front() else {
+                break;
+            };
+            self.bytes -= old.loaded.bytes;
+        }
+        self.bytes += entry.loaded.bytes;
+        self.entries.push_back(entry);
+    }
+}
+
 pub struct LocalTextBackend {
     content_root: PathBuf,
+    fonts: Mutex<FontCache>,
+}
+
+/// Discover installed content without consulting another user's profile.
+/// The explicit environment override also works on Linux and test runners.
+pub fn default_content_root() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("ROBLOX_CONTENT_DIR") {
+        return Some(path.into());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let path = PathBuf::from("/Applications/Roblox.app/Contents/Resources/content");
+        path.is_dir().then_some(path)
+    }
+    #[cfg(windows)]
+    {
+        let versions = PathBuf::from(std::env::var_os("LOCALAPPDATA")?).join("Roblox/Versions");
+        let mut candidates: Vec<_> = fs::read_dir(versions)
+            .ok()?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path().join("content"))
+            .filter(|path| path.join("fonts/families").is_dir())
+            .collect();
+        candidates.sort_by_key(|path| fs::metadata(path).and_then(|m| m.modified()).ok());
+        candidates.pop()
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        None
+    }
 }
 
 impl Default for LocalTextBackend {
     fn default() -> Self {
-        let root = std::env::var_os("ROBLOX_CONTENT_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                PathBuf::from("/Applications/Roblox.app/Contents/Resources/content")
-            });
-        Self { content_root: root }
+        Self::new(default_content_root().unwrap_or_default())
     }
+}
+
+fn read_bounded(path: &Path, max: usize) -> Result<Vec<u8>, String> {
+    let file = File::open(path).map_err(|_| "Installed Roblox font asset is unavailable")?;
+    let metadata = file
+        .metadata()
+        .map_err(|_| "Installed Roblox font asset is unavailable")?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > max as u64 {
+        return Err("Invalid or oversized font asset".into());
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(max as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "Installed Roblox font asset could not be read")?;
+    if bytes.is_empty() || bytes.len() > max {
+        return Err("Invalid or oversized font asset".into());
+    }
+    Ok(bytes)
 }
 
 impl LocalTextBackend {
     pub fn new(content_root: impl Into<PathBuf>) -> Self {
         Self {
             content_root: content_root.into(),
+            fonts: Mutex::new(FontCache::default()),
         }
     }
 
     fn checked_local_path(&self, suffix: &str) -> Result<PathBuf, String> {
-        if suffix.len() > 512 || suffix.contains('\0') || suffix.split('/').any(|part| part == "..")
+        if suffix.len() > 512
+            || suffix.contains(['\0', '\\', ':'])
+            || suffix
+                .split('/')
+                .any(|part| part.is_empty() || part == ".." || part == ".")
         {
             return Err("Invalid font asset reference".into());
+        }
+        if self.content_root.as_os_str().is_empty() {
+            return Err(
+                "Installed Roblox font assets are unavailable; set ROBLOX_CONTENT_DIR".into(),
+            );
         }
         let root = self
             .content_root
@@ -93,36 +189,12 @@ impl LocalTextBackend {
         Ok(path)
     }
 
-    fn checked_local_dir(&self, suffix: &str) -> Result<PathBuf, String> {
-        if suffix.len() > 512 || suffix.contains('\0') || suffix.split('/').any(|part| part == "..")
-        {
-            return Err("Invalid font asset reference".into());
-        }
-        let root = self
-            .content_root
-            .canonicalize()
-            .map_err(|_| "Installed Roblox font assets are unavailable")?;
-        let path = root
-            .join(suffix)
-            .canonicalize()
-            .map_err(|_| "Installed Roblox font asset is unavailable")?;
-        if !path.starts_with(&root) || !path.is_dir() {
-            return Err("Installed Roblox font asset is unavailable".into());
-        }
-        Ok(path)
-    }
-
     fn family_data(&self, reference: &str) -> Result<(String, Vec<FontFace>, PathBuf), String> {
         let suffix = reference
-            .strip_prefix("rbxasset://")
+            .strip_prefix("rbxasset://fonts/families/")
             .ok_or("Font family is not installed locally")?;
-        let path = self.checked_local_path(suffix)?;
-        let metadata =
-            fs::metadata(&path).map_err(|_| "Installed Roblox font asset is unavailable")?;
-        if metadata.len() == 0 || metadata.len() as usize > MAX_FONT_FAMILY_BYTES {
-            return Err("Font family exceeds size limit".into());
-        }
-        let raw = fs::read(&path).map_err(|_| "Installed Roblox font asset is unavailable")?;
+        let path = self.checked_local_path(&format!("fonts/families/{suffix}"))?;
+        let raw = read_bounded(&path, MAX_FONT_FAMILY_BYTES)?;
         let value: Value = serde_json::from_slice(&raw).map_err(|_| "Invalid font family JSON")?;
         let family_name = value
             .get("name")
@@ -136,140 +208,68 @@ impl LocalTextBackend {
 
     fn font_path(&self, family: &str, face: &FontFace) -> Result<PathBuf, String> {
         if let Some(path) = face.asset_id.strip_prefix("rbxasset://") {
-            let path = self.checked_local_path(path)?;
-            self.validate_font_file(&path)?;
-            return Ok(path);
+            return self.checked_local_path(path);
         }
-        // Installed Roblox builds include the same named family faces as font
-        // files. Resolve only the exact family/face filename; never substitute
-        // a system fallback font when the requested face is absent.
-        let fonts = self.checked_local_dir("fonts")?;
-        let safe_family: String = family
-            .chars()
-            .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
-            .collect();
-        let face_name = face
-            .name
-            .as_deref()
-            .ok_or("Font family face name is unavailable")?;
-        let safe_face: String = face_name
-            .chars()
-            .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
-            .collect();
-        if safe_family.is_empty() || safe_face.is_empty() {
+        let safe = |value: &str| {
+            value
+                .chars()
+                .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                .collect::<String>()
+        };
+        let family = safe(family);
+        let name = safe(
+            face.name
+                .as_deref()
+                .ok_or("Font family face name is unavailable")?,
+        );
+        if family.is_empty() || name.is_empty() {
             return Err("Installed Roblox font face is unavailable".into());
         }
-        let stem = format!("{safe_family}-{safe_face}");
-        for ext in ["ttf", "otf"] {
-            let candidate = fonts.join(format!("{stem}.{ext}"));
-            if candidate.is_file() {
-                let candidate = candidate
-                    .canonicalize()
-                    .map_err(|_| "Installed Roblox font face is unavailable")?;
-                if !candidate.starts_with(&fonts) {
-                    return Err("Installed Roblox font face is unavailable".into());
-                }
-                self.validate_font_file(&candidate)?;
-                return Ok(candidate);
+        for extension in ["ttf", "otf"] {
+            if let Ok(path) = self.checked_local_path(&format!("fonts/{family}-{name}.{extension}"))
+            {
+                return Ok(path);
             }
         }
         Err("Installed Roblox font face is unavailable".into())
     }
 
-    fn validate_font_file(&self, path: &Path) -> Result<(), String> {
-        let size = fs::metadata(path)
-            .map_err(|_| "Installed Roblox font face is unavailable")?
-            .len();
-        if size == 0 || size as usize > MAX_FONT_BYTES {
+    fn load_font(&self, path: &Path) -> Result<LoadedFont, String> {
+        let metadata =
+            fs::metadata(path).map_err(|_| "Installed Roblox font face is unavailable")?;
+        if !metadata.is_file() || metadata.len() == 0 || metadata.len() > MAX_FONT_BYTES as u64 {
             return Err("Invalid or oversized font file".into());
         }
-        let raw = fs::read(path).map_err(|_| "Installed Roblox font face is unavailable")?;
+        let modified = metadata.modified().ok();
+        if let Some(font) = self
+            .fonts
+            .lock()
+            .map_err(|_| "Font cache unavailable")?
+            .get(path, metadata.len(), modified)
+        {
+            return Ok(font);
+        }
+        let raw = read_bounded(path, MAX_FONT_BYTES)?;
         validate_font_bytes(&raw).map_err(str::to_owned)?;
-        Ok(())
+        let bytes = raw.len();
+        let font = Font::new(raw, 0).ok_or("Font shaping engine could not open this font")?;
+        if font.units_per_em() == 0 || font.num_glyphs() == 0 {
+            return Err("Font is missing required metrics".into());
+        }
+        let loaded = LoadedFont { font, bytes };
+        self.fonts
+            .lock()
+            .map_err(|_| "Font cache unavailable")?
+            .insert(CachedFont {
+                path: path.to_owned(),
+                modified,
+                loaded: loaded.clone(),
+            });
+        Ok(loaded)
     }
 
     fn measure(&self, spec: &FontSpec, text: &str) -> Result<f64, String> {
-        if text.is_empty() {
-            return Ok(0.0);
-        }
-        let cpath = CString::new(spec.path.as_os_str().as_encoded_bytes())
-            .map_err(|_| "Invalid font asset path")?;
-        // SAFETY: `cpath` remains alive through the call and points to a valid
-        // NUL-terminated path. CoreFoundation returns an owned URL reference.
-        let url = unsafe {
-            CFURL::from_file_system_representation(
-                None,
-                cpath.as_ptr().cast(),
-                cpath.as_bytes().len() as isize,
-                false,
-            )
-        }
-        .ok_or("CoreText could not open the installed font")?;
-        // SAFETY: the URL is a valid file URL retained by `url`; CoreText
-        // returns a retained array of descriptors which remains alive below.
-        let descriptors = unsafe { CTFontManagerCreateFontDescriptorsFromURL(&url) }
-            .ok_or("CoreText could not read the installed font")?;
-        if descriptors.count() == 0 {
-            return Err("CoreText found no font descriptors".into());
-        }
-        // SAFETY: CoreText documents this array as containing CTFontDescriptor
-        // references; the array retains its member for the duration of use.
-        let descriptor = unsafe { &*(descriptors.value_at_index(0) as *const CTFontDescriptor) };
-        // SAFETY: null matrix requests the font's standard transform; `size`
-        // was validated as finite and in the supported range by bounds().
-        let font = unsafe { CTFont::with_font_descriptor(descriptor, spec.size, std::ptr::null()) };
-        let ctext = CString::new(text).map_err(|_| "Text contains NUL")?;
-        let string = unsafe {
-            CFString::with_c_string(
-                None,
-                ctext.as_ptr(),
-                CFStringBuiltInEncodings::EncodingUTF8.0,
-            )
-        }
-        .ok_or("CoreText could not encode text")?;
-        // SAFETY: both callback tables are CoreFoundation's type callbacks;
-        // key and value below are valid CF objects retained by the dictionary.
-        let attributes = unsafe {
-            CFMutableDictionary::new(
-                None,
-                1,
-                &objc2_core_foundation::kCFTypeDictionaryKeyCallBacks
-                    as *const CFDictionaryKeyCallBacks,
-                &objc2_core_foundation::kCFTypeDictionaryValueCallBacks
-                    as *const CFDictionaryValueCallBacks,
-            )
-        }
-        .ok_or("CoreText could not create font attributes")?;
-        // SAFETY: CoreText's key is a CFStringRef and `font` is a CTFontRef,
-        // both valid CFTypeRefs. The dictionary retains each reference.
-        unsafe {
-            CFMutableDictionary::set_value(
-                Some(&attributes),
-                kCTFontAttributeName as *const _ as *const c_void,
-                font.as_ref() as *const CTFont as *const c_void,
-            );
-        }
-        let attributes = CFDictionary::new_copy(None, Some(&attributes))
-            .ok_or("CoreText could not freeze font attributes")?;
-        // SAFETY: `string` and `attributes` have the exact CF types required
-        // by CoreFoundation; both outlive the returned retained object.
-        let attributed = unsafe { CFAttributedString::new(None, Some(&string), Some(&attributes)) }
-            .ok_or("CoreText could not shape text")?;
-        // SAFETY: `attributed` remains alive through line creation; CTLine
-        // returns an owned immutable line reference.
-        let line = unsafe { CTLine::with_attributed_string(&attributed) };
-        // SAFETY: the output pointers are valid for this call and line is live.
-        let width = unsafe {
-            line.typographic_bounds(
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        };
-        if !width.is_finite() || width < 0.0 {
-            return Err("CoreText returned invalid text metrics".into());
-        }
-        Ok(width)
+        super::text_shaping::advance(&spec.loaded.font, text, spec.size)
     }
 
     fn bounds(&self, request: &Value) -> Result<Value, String> {
@@ -280,9 +280,18 @@ impl LocalTextBackend {
         if source.len() > MAX_TEXT_BYTES || source.contains('\0') {
             return Err("Invalid text measurement parameters".into());
         }
-        let size = finite_number(request.get("size"))
+        let base_size = finite_number(request.get("size"))
             .filter(|n| (1.0..=1000.0).contains(n))
             .ok_or("Invalid text measurement parameters")?;
+        // GUI TextScaled scales the entire styled line, including explicit
+        // rich-text sizes. Keep original run sizes intact until shaping.
+        let layout_scale = match request.get("layout_scale") {
+            None => 1.0,
+            value => finite_number(value)
+                .filter(|n| (0.001..=1000.0).contains(n))
+                .ok_or("Invalid text layout scale")?,
+        };
+        let size = base_size * layout_scale;
         let width = finite_number(request.get("width"))
             .filter(|n| (0.0..=32768.0).contains(n))
             .ok_or("Invalid text measurement parameters")?;
@@ -321,8 +330,15 @@ impl LocalTextBackend {
         {
             return Err("Invalid displayed font descriptor".into());
         }
-        let (mut text, runs) =
-            self.make_runs(source, size, family, weight, style, request.get("runs"))?;
+        let (mut text, runs) = self.make_runs(
+            source,
+            base_size,
+            family,
+            weight,
+            style,
+            layout_scale,
+            request.get("runs"),
+        )?;
         if text.is_empty() {
             return Ok(json!([0, 0]));
         }
@@ -399,6 +415,10 @@ impl LocalTextBackend {
                 for (offset, cluster) in &graphemes {
                     positions.push(paragraph_start + offset + cluster.len());
                 }
+                let opportunities: std::collections::BTreeSet<_> =
+                    unicode_linebreak::linebreaks(paragraph)
+                        .map(|(offset, _)| paragraph_start + offset)
+                        .collect();
                 let mut start = 0usize;
                 while start < graphemes.len() {
                     let remaining = graphemes.len() - start;
@@ -431,20 +451,18 @@ impl LocalTextBackend {
                         }
                     }
                     let mut end = start + low.max(1);
-                    if end < graphemes.len() && !graphemes[end].1.chars().all(char::is_whitespace) {
-                        if let Some(space) = (start..end)
+                    if end < graphemes.len() {
+                        if let Some(boundary) = (start + 1..=end)
                             .rev()
-                            .find(|i| graphemes[*i].1.chars().all(char::is_whitespace))
+                            .find(|i| opportunities.contains(&positions[*i]))
                         {
-                            if space > start {
-                                end = space;
-                            }
+                            end = boundary;
                         }
                     }
                     let line_start = positions[start];
                     let raw_end = positions[end];
                     let line_end = text[line_start..raw_end]
-                        .trim_end_matches(char::is_whitespace)
+                        .trim_end_matches(breakable_space)
                         .len()
                         + line_start;
                     let line_width = advance(line_start, line_end, &mut measured, &mut work)?;
@@ -452,8 +470,7 @@ impl LocalTextBackend {
                     last_height = line_height(&runs, line_start, line_end, size);
                     total_height += last_height * line_spacing;
                     start = end;
-                    while start < graphemes.len()
-                        && graphemes[start].1.chars().all(char::is_whitespace)
+                    while start < graphemes.len() && graphemes[start].1.chars().all(breakable_space)
                     {
                         start += 1;
                     }
@@ -472,6 +489,12 @@ impl LocalTextBackend {
         text.clear();
         // LineHeight adds spacing between lines, not after the final line.
         total_height -= last_height * (line_spacing - 1.0);
+        if [widest, total_height]
+            .iter()
+            .any(|n| !n.is_finite() || !(0.0..=4_194_304.0).contains(n))
+        {
+            return Err("Text layout extent limit exceeded".into());
+        }
         Ok(json!([widest.ceil() as u64, total_height.ceil() as u64]))
     }
 
@@ -482,6 +505,7 @@ impl LocalTextBackend {
         base_family: &str,
         base_weight: u16,
         base_italic: bool,
+        layout_scale: f64,
         input: Option<&Value>,
     ) -> Result<(String, Vec<Run>), String> {
         let default = [json!({"text":source,"style":{}})];
@@ -496,6 +520,10 @@ impl LocalTextBackend {
         let mut raw = String::new();
         let mut text = String::new();
         let mut runs: Vec<Run> = Vec::new();
+        let mut families = HashMap::new();
+        let mut loaded_fonts: HashMap<PathBuf, LoadedFont> = HashMap::new();
+        let mut font_bytes = 0usize;
+        let mut variants = std::collections::HashSet::new();
         let mut previous_cr = false;
         for value in values {
             let part = value
@@ -506,6 +534,9 @@ impl LocalTextBackend {
                 .get("style")
                 .and_then(Value::as_object)
                 .ok_or("Invalid text run")?;
+            if raw.len().saturating_add(part.len()) > MAX_TEXT_BYTES {
+                return Err("Invalid text runs".into());
+            }
             raw.push_str(part);
             let mut content = part.to_owned();
             if previous_cr && content.starts_with('\n') {
@@ -517,6 +548,10 @@ impl LocalTextBackend {
             content = content
                 .replace("\r\n", "\n")
                 .replace('\r', "\n")
+                .replace(
+                    ['\u{0085}', '\u{2028}', '\u{2029}', '\u{000b}', '\u{000c}'],
+                    "\n",
+                )
                 .replace('\t', " ");
             if content.is_empty() {
                 continue;
@@ -558,11 +593,37 @@ impl LocalTextBackend {
             if !(1.0..=1000.0).contains(&run_size) || !(0.5..=1.0).contains(&scale) {
                 return Err("Invalid text run size".into());
             }
-            let (family_name, faces, _) = self.family_data(family)?;
+            let effective_size = run_size * scale * layout_scale;
+            variants.insert((family.to_owned(), weight, italic, effective_size.to_bits()));
+            if variants.len() > MAX_VARIANTS {
+                return Err("Text measurement font variant limit exceeded".into());
+            }
+            if !families.contains_key(family) {
+                families.insert(family.to_owned(), self.family_data(family)?);
+            }
+            let (family_name, faces, _) = &families[family];
             let face =
                 select_font_face(&faces, weight, italic).ok_or("Font face is unavailable")?;
             let path = self.font_path(&family_name, face)?;
-            let effective_size = run_size * scale;
+            let loaded = if let Some(loaded) = loaded_fonts.get(&path) {
+                loaded.clone()
+            } else {
+                // Reject the next file before reading it if this request
+                // already retains too much font data across its rich runs.
+                let size = fs::metadata(&path)
+                    .map_err(|_| "Font asset unavailable")?
+                    .len();
+                if size > MAX_REQUEST_FONT_BYTES.saturating_sub(font_bytes) as u64 {
+                    return Err("Text measurement font data limit exceeded".into());
+                }
+                let loaded = self.load_font(&path)?;
+                font_bytes += loaded.bytes;
+                if font_bytes > MAX_REQUEST_FONT_BYTES {
+                    return Err("Text measurement font data limit exceeded".into());
+                }
+                loaded_fonts.insert(path, loaded.clone());
+                loaded
+            };
             let start = text.len();
             text.push_str(&content);
             let end = text.len();
@@ -585,7 +646,7 @@ impl LocalTextBackend {
                     weight,
                     italic,
                     size: effective_size,
-                    path,
+                    loaded,
                 },
             });
         }
@@ -620,6 +681,12 @@ fn finite_number(value: Option<&Value>) -> Option<f64> {
     }
 }
 
+// Non-breaking spaces still have a glyph advance. Only discard spaces which
+// can actually separate lines; grapheme boundaries also protect emoji/marks.
+fn breakable_space(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\u{2000}'..='\u{2006}' | '\u{2008}'..='\u{200b}' | '\u{205f}' | '\u{3000}')
+}
+
 fn line_height(runs: &[Run], start: usize, end: usize, base: f64) -> f64 {
     let height = runs
         .iter()
@@ -634,53 +701,5 @@ fn line_height(runs: &[Run], start: usize, end: usize, base: f64) -> f64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::engine_services::TextServiceBackend;
-
-    fn has_local_roblox_fonts() -> bool {
-        Path::new(
-            "/Applications/Roblox.app/Contents/Resources/content/fonts/families/BuilderSans.json",
-        )
-        .exists()
-            || std::env::var_os("ROBLOX_CONTENT_DIR").is_some()
-    }
-
-    #[test]
-    fn family_lookup_uses_only_installed_files() {
-        if !has_local_roblox_fonts() {
-            return;
-        }
-        let backend = LocalTextBackend::default();
-        let family = TextRequest::Family {
-            request_id: 1,
-            family: "rbxasset://fonts/families/BuilderSans.json".into(),
-        };
-        let result = backend.handle(&family).unwrap();
-        assert_eq!(result["Name"], "Builder Sans");
-        assert!(!result["Faces"].as_array().unwrap().is_empty());
-        let missing = TextRequest::Family {
-            request_id: 2,
-            family: "rbxasset://fonts/families/../../secret.json".into(),
-        };
-        assert!(backend.handle(&missing).is_err());
-    }
-
-    #[test]
-    fn coretext_returns_real_positive_and_wrapped_metrics() {
-        if !has_local_roblox_fonts() {
-            return;
-        }
-        let backend = LocalTextBackend::default();
-        let family =
-            json!({"family":"rbxasset://fonts/families/BuilderSans.json","weight":400,"style":0});
-        let req = |text: &str, width: f64| TextRequest::Bounds {
-            request_id: 1,
-            payload: json!({"kind":"bounds","request_id":1,"font":family,"text":text,"size":20,"width":width}),
-        };
-        let single = backend.handle(&req("Hello", 1000.0)).unwrap();
-        let wrapped = backend.handle(&req("Hello world", 35.0)).unwrap();
-        assert!(single[0].as_u64().unwrap() > 0);
-        assert!(wrapped[1].as_u64().unwrap() > single[1].as_u64().unwrap());
-    }
-}
+#[path = "local_text_tests.rs"]
+mod tests;
