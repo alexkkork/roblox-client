@@ -7,6 +7,7 @@ mod codecs;
 pub mod connection_probe;
 pub mod capture_replay;
 mod decompiler;
+pub mod draco_mesh;
 pub mod engine_bridge;
 pub mod engine_attributes;
 pub mod engine_world_view;

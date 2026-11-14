@@ -445,13 +445,31 @@ fn decode_mesh(raw: &[u8]) -> Result<DecodedMesh, RenderAssetError> {
         .iter()
         .position(|b| *b == b'\n')
         .ok_or(RenderAssetError::InvalidAsset("mesh header missing"))?;
+    // Legacy text meshes may end their header line with CRLF.
     let version = std::str::from_utf8(&raw[..newline])
-        .map_err(|_| RenderAssetError::InvalidAsset("invalid mesh header"))?;
+        .map_err(|_| RenderAssetError::InvalidAsset("invalid mesh header"))?
+        .trim_end_matches('\r');
     let body = &raw[newline + 1..];
     match version {
         "version 1.00" | "version 1.01" => decode_mesh_v1(version, body),
         "version 2.00" | "version 3.00" | "version 3.01" | "version 4.00" | "version 4.01"
         | "version 5.00" => decode_mesh_binary(version, body),
+        // Chunked meshes; 7.00 stores its geometry with Draco (draco_mesh.rs).
+        "version 6.00" | "version 7.00" => {
+            let mesh = crate::draco_mesh::decode_chunked(body)
+                .map_err(|_| RenderAssetError::InvalidAsset("invalid chunked mesh"))?;
+            if mesh.positions.iter().chain(&mesh.normals).chain(&mesh.uvs).any(|v| !v.is_finite()) {
+                return Err(RenderAssetError::InvalidAsset("mesh vertex is not finite"));
+            }
+            Ok(DecodedMesh {
+                positions: mesh.positions,
+                normals: mesh.normals,
+                uv: mesh.uvs,
+                indices: mesh.indices,
+                version: version.to_owned(),
+                skinned: false,
+            })
+        }
         _ => Err(RenderAssetError::InvalidAsset("unsupported mesh version")),
     }
 }
@@ -667,7 +685,7 @@ fn decode_mesh_records(
             "truncated or trailing mesh bytes",
         ));
     }
-    let mut end = faces;
+    let (mut start, mut end) = (0, faces);
     if lods > 0 {
         let offsets: Vec<usize> = (0..lods)
             .map(|i| le_u32(body, lod_start + i * 4).map(|n| n as usize))
@@ -678,8 +696,10 @@ fn decode_mesh_records(
         {
             return Err(RenderAssetError::InvalidAsset("invalid mesh LOD ranges"));
         }
-        if lods > 1 {
-            end = offsets[1];
+        // Draw the first non-empty level; a table of empty levels (dynamic
+        // heads store 0, 0) means one level of every face.
+        if let Some(level) = offsets.windows(2).find(|w| w[0] < w[1]) {
+            (start, end) = (level[0], level[1]);
         }
     }
     let mut positions = Vec::with_capacity(vertices * 3);
@@ -697,8 +717,8 @@ fn decode_mesh_records(
             uv.push(f32_at(body, off + 24 + c * 4)? as f64);
         }
     }
-    let mut indices = Vec::with_capacity(end * 3);
-    for i in 0..end {
+    let mut indices = Vec::with_capacity((end - start) * 3);
+    for i in start..end {
         for c in 0..3 {
             let index = le_u32(body, face_start + i * 12 + c * 4)?;
             if index as usize >= vertices {
