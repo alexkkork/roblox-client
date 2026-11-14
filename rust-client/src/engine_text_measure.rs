@@ -48,7 +48,7 @@ thread_local! {
     static MEASUREMENTS: RefCell<Measurements> = RefCell::new(Measurements::default());
 }
 
-fn measure(raw: &[u8]) -> Result<[f64; 2], String> {
+pub(crate) fn measure(raw: &[u8]) -> Result<[f64; 2], String> {
     let payload = serde_json::from_slice(raw).map_err(|_| "Invalid text measurement request")?;
     let request = TextRequest::parse(&payload).map_err(str::to_owned)?;
     if !matches!(request, TextRequest::Bounds { .. }) {

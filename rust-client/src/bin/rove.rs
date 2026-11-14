@@ -17,7 +17,7 @@ use headless_luau::live_runtime::{compact_delta_with_candidates, compact_snapsho
 use headless_luau::runtime_owner::{successful, Runtime as Driver};
 use headless_luau::session_ui::SessionUi;
 use headless_luau::ui_server::{random_ui_key, UiConfig, UiServer};
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 use rove_client_core::console::{ScriptConsole, SessionLease};
 use rove_client_core::{
     console::send_request,
@@ -32,7 +32,7 @@ use serde_json::{json, Value};
 use std::{
     collections::{BTreeSet, HashSet},
     env,
-    fs::File,
+    fs::{self, File},
     io::{self, BufRead, BufReader, IsTerminal, Read, Write},
     path::{Path, PathBuf},
     sync::{mpsc, Arc},
@@ -42,7 +42,7 @@ use std::{
 
 const SNAPSHOT_LIMIT: usize = 8 * 1024 * 1024;
 const SOURCE_LIMIT: usize = 100 * 1024 * 1024;
-const USAGE: &str = "rove run --snapshot FILE --script FILE [--deltas JSONL] [--lua-memory-mib 32] [--timeout-seconds 60] [--hold-ms 0] [--json]\nrove replay --packets FILE --script FILE [--json]\nrove replay-stream --packets FILE --script FILE [--packet-interval-ms 0] [--json]\nrove repl --snapshot FILE [--lua-memory-mib 32]\nrove console --snapshot FILE --socket PATH --lease-root PATH [--lua-memory-mib 32]\nrove serve --snapshot FILE [--port 5467] [--socket PATH --lease-root PATH] [--ui-root PATH] [--content-root PATH] [--script FILE] [--serve-seconds 0]\nrove submit --socket PATH --script FILE\nrove status --socket PATH --job-id ID\nrove leave --socket PATH\nrove snapshot --snapshot FILE [--deltas JSONL]\nrove auth [--credential-file FILE]\nrove join (--place-id ID [--job-id UUID] | --private-link-file FILE | --owned-private-server-file FILE) [--credential-file FILE] [--transport-seconds 1..30 | --session-seconds 1..3600 [--physics] [--lightweight] [--script FILE [--lua-memory-mib 32]]]\nSession mode owns live reception in Rust; --script runs authored Luau against ordered received updates. C++ engine bindings remain; --physics enables own-character gravity and movement; replicated game scripts remain separate work.\n--lightweight omits received visual/audio asset properties (reads report unavailable) and uses a 1 MiB cold-property cache backed by a private temporary file; physics and gameplay state remain.\nThe Lua memory limit is an allocator cap, not a total-process RAM cap.";
+const USAGE: &str = "rove run --snapshot FILE --script FILE [--deltas JSONL] [--lua-memory-mib 32] [--timeout-seconds 60] [--hold-ms 0] [--json]\nrove replay --packets FILE --script FILE [--json]\nrove replay-stream --packets FILE --script FILE [--packet-interval-ms 0] [--json]\nrove repl --snapshot FILE [--lua-memory-mib 32]\nrove console --snapshot FILE --socket PATH --lease-root PATH [--lua-memory-mib 32]\nrove serve --snapshot FILE [--port 5467] [--socket PATH --lease-root PATH] [--ui-root PATH] [--content-root PATH] [--script FILE] [--serve-seconds 0]\nrove submit --socket PATH --script FILE\nrove status --socket PATH --job-id ID\nrove leave --socket PATH\nrove snapshot --snapshot FILE [--deltas JSONL]\nrove auth [--credential-file FILE]\nrove join (--place-id ID [--job-id UUID] | --private-link-file FILE | --owned-private-server-file FILE) [--credential-file FILE] [--transport-seconds 1..30 | --session-seconds 1..3600 [--physics] [--lightweight] [--script FILE [--lua-memory-mib 32]]]\nSession mode owns live reception in Rust; --script runs authored Luau against ordered received updates. The selected engine host embeds the official Luau VM; --physics enables own-character gravity and movement.\n--lightweight omits received visual/audio asset properties (reads report unavailable) and uses a 1 MiB cold-property cache backed by a private temporary file; physics and gameplay state remain.\nThe Lua memory limit is an allocator cap, not a total-process RAM cap.";
 
 // json! borrows its inputs, so an existing Value or String gets cloned.
 // move the big inputs in ourselves so we do not keep two copies.
@@ -675,7 +675,7 @@ fn finish_job(
     )
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn console(options: &Options, snapshot: Value) -> Result<Value, String> {
     let _lease = SessionLease::acquire(options.lease_root.as_ref().unwrap())?;
     let mut listener = ScriptConsole::bind(options.socket.as_ref().unwrap(), None)?;
@@ -732,12 +732,54 @@ fn console(options: &Options, snapshot: Value) -> Result<Value, String> {
     Ok(json!({"ok":true,"values":[],"closed":true,"requests":listener.requests_handled()}))
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn console(_options: &Options, _snapshot: Value) -> Result<Value, String> {
     Err("The socket console currently requires Unix; use repl or run on this platform".into())
 }
 
-#[cfg(unix)]
+fn default_ui_root() -> Option<PathBuf> {
+    // Release archives are relocatable. The build-machine source path is only
+    // a development fallback, never the sole location checked by an .exe.
+    let mut candidates = Vec::new();
+    if let Ok(executable) = env::current_exe() {
+        if let Some(parent) = executable.parent() {
+            candidates.push(parent.join("ui"));
+        }
+    }
+    if let Ok(current) = env::current_dir() {
+        candidates.push(current.join("ui"));
+    }
+    candidates.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ui"));
+    candidates
+        .into_iter()
+        .find(|path| path.join("local-session.html").is_file())
+}
+
+fn default_content_root() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        let path = PathBuf::from("/Applications/Roblox.app/Contents/Resources/content");
+        path.is_dir().then_some(path)
+    }
+    #[cfg(windows)]
+    {
+        let versions = PathBuf::from(env::var_os("LOCALAPPDATA")?).join("Roblox/Versions");
+        let mut candidates: Vec<_> = fs::read_dir(versions)
+            .ok()?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path().join("content"))
+            .filter(|path| path.is_dir())
+            .collect();
+        candidates.sort_by_key(|path| fs::metadata(path).and_then(|m| m.modified()).ok());
+        candidates.pop()
+    }
+    #[cfg(not(any(target_os = "macos", windows)))]
+    {
+        None
+    }
+}
+
+#[cfg(any(unix, windows))]
 fn serve(options: &Options, snapshot: Value) -> Result<Value, String> {
     let _lease = options
         .lease_root
@@ -753,26 +795,28 @@ fn serve(options: &Options, snapshot: Value) -> Result<Value, String> {
         .content_root
         .clone()
         .or_else(|| env::var_os("ROBLOX_CONTENT_DIR").map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("/Applications/Roblox.app/Contents/Resources/content"));
+        .or_else(default_content_root);
     #[cfg(target_os = "macos")]
     let backend = Some(Arc::new(
-        headless_luau::engine_services::local_text::LocalTextBackend::new(content.clone()),
+        headless_luau::engine_services::local_text::LocalTextBackend::new(
+            content.clone().unwrap_or_default(),
+        ),
     )
         as Arc<dyn headless_luau::engine_services::TextServiceBackend>);
     #[cfg(not(target_os = "macos"))]
     let backend = None;
     let runtime = Driver::with_text_backend(snapshot, options.memory, backend)?;
     let mut session = SessionUi::new(runtime)?;
-    if content.is_dir() || options.content_root.is_some() {
+    if let Some(content) = content {
         session.set_content_root(content)?;
     }
     for_deltas(options.deltas.as_deref(), |delta| {
         successful(&session.runtime.call(update_command(delta, 10))?)
     })?;
-    let assets = options
-        .ui_root
-        .clone()
-        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ui"));
+    let assets =
+        options.ui_root.clone().or_else(default_ui_root).ok_or(
+            "Local UI assets unavailable; put ui beside the executable or use --ui-root PATH",
+        )?;
     if !assets.join("local-session.html").is_file() {
         return Err("Local UI assets unavailable; use --ui-root PATH".into());
     }
@@ -841,7 +885,7 @@ fn serve(options: &Options, snapshot: Value) -> Result<Value, String> {
     Ok(result)
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn serve(_options: &Options, _snapshot: Value) -> Result<Value, String> {
     Err("The shared session launcher currently requires Unix".into())
 }

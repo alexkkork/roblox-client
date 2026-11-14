@@ -474,15 +474,28 @@ impl IssuedJoinAllocation {
     }
     /// Prepare ordered login messages from this allocation only. Wire bytes
     /// contain credentials and intentionally have no logging/Debug wrapper.
-    pub fn game_login_packets(&self,range:Option<(u8,u8)>)->Result<Vec<Vec<u8>>,SessionError> {
-        let ticket=self.tickets.client_ticket().ok_or_else(||SessionError::new("Issued client ticket missing"))?;
-        let encode=|| -> Result<Vec<Vec<u8>>,crate::login::LoginCodecError> {
-            Ok(vec![crate::login::issued_early_auth(ticket)?,
-                crate::login::protocol_sync(&self.game_join_fields,self.game_join_ticket.as_ref(),range)?,
-                crate::login::verification_packet()?,crate::login::ticket_packet(&self.game_join_fields)?,
-                crate::login::server_id_packet()])
+    pub fn game_login_packets(
+        &self,
+        range: Option<(u8, u8)>,
+    ) -> Result<Vec<Vec<u8>>, SessionError> {
+        let ticket = self
+            .tickets
+            .client_ticket()
+            .ok_or_else(|| SessionError::new("Issued client ticket missing"))?;
+        let encode = || -> Result<Vec<Vec<u8>>, crate::login::LoginCodecError> {
+            Ok(vec![
+                crate::login::issued_early_auth(ticket)?,
+                crate::login::protocol_sync(
+                    &self.game_join_fields,
+                    self.game_join_ticket.as_ref(),
+                    range,
+                )?,
+                crate::login::verification_packet()?,
+                crate::login::ticket_packet(&self.game_join_fields)?,
+                crate::login::server_id_packet(),
+            ])
         };
-        encode().map_err(|_|SessionError::new("Issued game login fields could not be encoded"))
+        encode().map_err(|_| SessionError::new("Issued game login fields could not be encoded"))
     }
 }
 impl fmt::Debug for IssuedJoinAllocation {
@@ -710,7 +723,7 @@ pub fn request_allocation(
         private_server_owner_id: owner_id,
         tickets,
         game_join_fields: crate::login::retain_issued_game_fields(join),
-        game_join_ticket: data.and_then(|d|d.get("joinTicket")).cloned(),
+        game_join_ticket: data.and_then(|d| d.get("joinTicket")).cloned(),
     }))
 }
 
@@ -850,8 +863,8 @@ pub(crate) fn test_issued_allocation() -> IssuedJoinAllocation {
             client_ticket: None,
             join_ticket: None,
         },
-        game_join_fields:json!({}),
-        game_join_ticket:None,
+        game_join_fields: json!({}),
+        game_join_ticket: None,
     }
 }
 fn parse_endpoint(join: &serde_json::Map<String, Value>) -> Option<Ipv4Addr> {
@@ -962,33 +975,10 @@ fn canonical_uuid(value: &str) -> bool {
         && nonzero
 }
 
-#[cfg(unix)]
 pub fn new_join_attempt_id() -> Result<String, SessionError> {
     let mut bytes = [0u8; 16];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut bytes))
+    rove_client_core::entropy::fill(&mut bytes)
         .map_err(|_| SessionError::new("Could not generate join attempt identifier"))?;
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    Ok(format!("{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}", bytes[0],bytes[1],bytes[2],bytes[3],bytes[4],bytes[5],bytes[6],bytes[7],bytes[8],bytes[9],bytes[10],bytes[11],bytes[12],bytes[13],bytes[14],bytes[15]))
-}
-
-#[cfg(windows)]
-pub fn new_join_attempt_id() -> Result<String, SessionError> {
-    use std::ffi::c_void;
-    #[link(name = "bcrypt")]
-    extern "system" {
-        fn BCryptGenRandom(algorithm: *mut c_void, buffer: *mut u8, length: u32, flags: u32)
-            -> i32;
-    }
-    let mut bytes = [0u8; 16];
-    // BCRYPT_USE_SYSTEM_PREFERRED_RNG. The handle is null by API contract.
-    let status = unsafe { BCryptGenRandom(std::ptr::null_mut(), bytes.as_mut_ptr(), 16, 2) };
-    if status < 0 {
-        return Err(SessionError::new(
-            "Could not generate join attempt identifier",
-        ));
-    }
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     Ok(format!("{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}", bytes[0],bytes[1],bytes[2],bytes[3],bytes[4],bytes[5],bytes[6],bytes[7],bytes[8],bytes[9],bytes[10],bytes[11],bytes[12],bytes[13],bytes[14],bytes[15]))
@@ -1070,20 +1060,48 @@ mod tests {
     }
     #[test]
     fn fresh_allocation_preserves_object_join_ticket_for_rust_login() {
-        let ticket=format!("a;b;{};{};1",base64::engine::general_purpose::STANDARD.encode([1;32]),
-            base64::engine::general_purpose::STANDARD.encode([2;16]));
-        let mut body=ready_body(123);
-        body["joinScript"]["ClientTicket"]=json!(ticket);
-        body["joinTicket"]=json!({"owned_fixture":"issued-join-ticket"});
-        let (mut session,_)=mock_session(vec![wire(200,None,false,&body.to_string())]);
-        let result=request_allocation(&mut session,&target(123),None,"00000000-0000-4000-8000-000000000001",42).unwrap();
-        let AllocationResult::Ready(issued)=result else {panic!("expected fixture allocation")};
-        let packets=issued.game_login_packets(Some((13,14))).unwrap();
-        assert_eq!(packets.iter().map(|p|p[0]).collect::<Vec<_>>(),vec![168,144,146,138,143]);
-        assert_eq!(packets[1],crate::login::protocol_sync(&body["joinScript"],Some(&body["joinTicket"]),Some((13,14))).unwrap());
-        assert_eq!(packets[3],crate::login::ticket_packet(&body["joinScript"]).unwrap());
-        let debug=format!("{issued:?}");
-        for secret in [ticket.as_str(),"issued-join-ticket","session-secret"] {assert!(!debug.contains(secret));}
+        let ticket = format!(
+            "a;b;{};{};1",
+            base64::engine::general_purpose::STANDARD.encode([1; 32]),
+            base64::engine::general_purpose::STANDARD.encode([2; 16])
+        );
+        let mut body = ready_body(123);
+        body["joinScript"]["ClientTicket"] = json!(ticket);
+        body["joinTicket"] = json!({"owned_fixture":"issued-join-ticket"});
+        let (mut session, _) = mock_session(vec![wire(200, None, false, &body.to_string())]);
+        let result = request_allocation(
+            &mut session,
+            &target(123),
+            None,
+            "00000000-0000-4000-8000-000000000001",
+            42,
+        )
+        .unwrap();
+        let AllocationResult::Ready(issued) = result else {
+            panic!("expected fixture allocation")
+        };
+        let packets = issued.game_login_packets(Some((13, 14))).unwrap();
+        assert_eq!(
+            packets.iter().map(|p| p[0]).collect::<Vec<_>>(),
+            vec![168, 144, 146, 138, 143]
+        );
+        assert_eq!(
+            packets[1],
+            crate::login::protocol_sync(
+                &body["joinScript"],
+                Some(&body["joinTicket"]),
+                Some((13, 14))
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            packets[3],
+            crate::login::ticket_packet(&body["joinScript"]).unwrap()
+        );
+        let debug = format!("{issued:?}");
+        for secret in [ticket.as_str(), "issued-join-ticket", "session-secret"] {
+            assert!(!debug.contains(secret));
+        }
         assert!(test_issued_allocation().game_login_packets(None).is_err());
     }
 

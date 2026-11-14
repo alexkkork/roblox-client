@@ -1,5 +1,5 @@
 //! one owner for the official luau vm, running in this process.
-//! keep the native handle on its owner thread. frontends send bounded commands
+//! keep the VM on its owner thread. frontends send bounded commands
 //! instead of sharing the raw handle or copying the world into another vm.
 use crate::engine_services::{TextServiceBackend, TextServiceQueue};
 use crate::engine_world_view::SharedProjectedWorldView;
@@ -509,7 +509,17 @@ impl Runtime {
     pub fn summary(&self) -> Value {
         json!({"ok":true,"values":[],"connected":self.vm.is_some(),"closed":self.vm.is_none(),
             "runtime":"rust_in_process_official_luau","live_game_session":false,
-            "rust_engine_bindings":["class_ancestry","Vector2int16","Vector3int16","Region3int16","PhysicalProperties","Color3","Vector2","InstanceAttributes"],
+            "engine_host":if cfg!(feature = "rust-host") { "rust" } else { "legacy_cpp" },
+            "rust_engine_bindings":if cfg!(feature = "rust-host") {
+                &[
+                    "world", "typed_values", "attributes", "services", "signals",
+                    "scheduler", "script_lifecycle", "actors", "shared_tables", "remotes",
+                    "movement", "spatial_queries", "input", "gui", "drawing", "playback",
+                    "files", "console", "http", "websockets",
+                ][..]
+            } else {
+                &["class_ancestry","Vector2int16","Vector3int16","Region3int16","PhysicalProperties","Color3","Vector2","InstanceAttributes"][..]
+            },
             "elapsed_seconds":self.started.elapsed().as_secs_f64(),"vm_requests":self.calls,
             "actor_vm_count":self.actor_vms,"active_jobs":self.active.len(),
             "cached_job_results":self.completed.len(),"event_bytes":self.events.bytes,
@@ -553,7 +563,7 @@ impl Runtime {
     }
 
     pub fn close(&mut self) {
-        self.vm.take(); // Session::drop calls the native close ABI exactly once.
+        self.vm.take(); // The selected Session backend owns and closes its VM.
         if let Some(mut queue) = self.text_service.take() {
             queue.close();
         }

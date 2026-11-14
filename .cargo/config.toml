@@ -1,0 +1,3 @@
+[target.x86_64-pc-windows-msvc]
+# ship the CRT with the executable so the download works without extra DLLs.
+rustflags = ["-C", "target-feature=+crt-static"]

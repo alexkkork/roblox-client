@@ -1,5 +1,3 @@
-#[cfg(windows)]
-use std::net::TcpStream;
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 // Cargo attaches build.rs native link metadata to the package library target.
@@ -228,42 +226,24 @@ fn submit(options: &Options) -> Result<Value, String> {
     )
 }
 
+#[cfg(windows)]
 fn console_request(socket: &PathBuf, request: &Value) -> Result<Value, String> {
-    #[cfg(windows)]
-    let endpoint: Value =
-        serde_json::from_slice(&read_file(socket, 1024)?).map_err(|e| e.to_string())?;
-    #[cfg(windows)]
-    let request = {
-        let token = endpoint
-            .get("token")
-            .and_then(Value::as_str)
-            .ok_or("invalid console token")?;
-        if token.len() != 64 || !token.bytes().all(|c| c.is_ascii_hexdigit()) {
-            return Err("invalid console token".into());
-        }
-        let mut authenticated = request.clone();
-        authenticated["_console_token"] = json!(token);
-        authenticated
-    };
+    let response =
+        rove_client_core::console::send_request(socket, request.clone(), Duration::from_secs(8))?;
+    validate_result(
+        &serde_json::to_vec(&response).map_err(|e| e.to_string())?,
+        true,
+    )
+}
+
+#[cfg(unix)]
+fn console_request(socket: &PathBuf, request: &Value) -> Result<Value, String> {
     let mut frame = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
     frame.push(b'\n');
     if frame.len() > 608 * 1024 * 1024 {
         return Err("source request exceeds 608 MiB".into());
     }
     let deadline = Instant::now() + Duration::from_secs(8);
-    #[cfg(windows)]
-    let mut stream = {
-        let port = endpoint
-            .get("port")
-            .and_then(Value::as_u64)
-            .filter(|p| *p > 0 && *p <= 65535)
-            .ok_or("invalid console port")?;
-        TcpStream::connect_timeout(
-            &std::net::SocketAddr::from(([127, 0, 0, 1], port as u16)),
-            Duration::from_secs(8),
-        )
-        .map_err(|e| format!("cannot connect to client script console: {e}"))?
-    };
     #[cfg(unix)]
     let mut stream = UnixStream::connect(socket)
         .map_err(|e| format!("cannot connect to client script console: {e}"))?;

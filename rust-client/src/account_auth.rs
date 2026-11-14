@@ -100,15 +100,25 @@ impl AccountSession {
         Self::from_private_file(root.as_ref().join("secrets/roblox-cookie.txt"))
     }
 
-    /// Load the configured root used by the Python launcher, or this checkout.
+    /// Load the configured session root or the platform's local account files.
     pub fn from_default_project() -> Result<Self, AccountError> {
         if let Some(root) = std::env::var_os("RCR_SESSION_ROOT") {
             return Self::from_project_root(root);
         }
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .ok_or_else(|| AccountError::new("Project root is unavailable"))?;
-        Self::from_project_root(root)
+        #[cfg(windows)]
+        {
+            let local = std::env::var_os("LOCALAPPDATA").ok_or_else(|| {
+                AccountError::new("Use --credential-file when LOCALAPPDATA is unavailable")
+            })?;
+            return Self::from_project_root(std::path::PathBuf::from(local).join("rove"));
+        }
+        #[cfg(not(windows))]
+        {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .ok_or_else(|| AccountError::new("Project root is unavailable"))?;
+            Self::from_project_root(root)
+        }
     }
 
     /// Construct from a value obtained directly from the user or a secret
@@ -249,7 +259,13 @@ fn read_private_cookie(path: &Path) -> Result<String, AccountError> {
         validate_private_file(&file)?;
         read_cookie_bytes(&mut file)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let mut file = rove_client_core::windows_private::open_read(path, COOKIE_LIMIT as u64)
+            .map_err(|_| AccountError::new("Credential file and directory must be private, regular Windows files under 32 KiB"))?;
+        read_cookie_bytes(&mut file)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = path;
         Err(AccountError::new(
@@ -424,5 +440,42 @@ mod tests {
         std::os::unix::fs::symlink(&path, &leaked_symlink).unwrap();
         assert!(read_private_cookie(&leaked_symlink).is_err());
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_loads_private_credentials_and_private_links_without_network() {
+        let directory = std::env::temp_dir().join(format!(
+            "rove-credential-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        drop(rove_client_core::windows_private::create_directory(&directory).unwrap());
+        let cookie = directory.join("synthetic-cookie.txt");
+        let mut file = rove_client_core::windows_private::create_file(&cookie, false).unwrap();
+        file.write_all(b"synthetic-cookie\r\n").unwrap();
+        drop(file);
+        assert_eq!(read_private_cookie(&cookie).unwrap(), "synthetic-cookie");
+        let link = directory.join("synthetic-link.json");
+        let url = "https://www.roblox.com/share?code=0123456789abcdef0123456789abcdef&type=Server";
+        let mut file = rove_client_core::windows_private::create_file(&link, false).unwrap();
+        serde_json::to_writer(&mut file, &serde_json::json!({"url":url})).unwrap();
+        drop(file);
+        assert_eq!(
+            crate::join_coordinator::read_private_share_link(&link).unwrap(),
+            url
+        );
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&cookie)
+            .unwrap();
+        file.write_all(&vec![b'x'; COOKIE_LIMIT]).unwrap();
+        drop(file);
+        let error = read_private_cookie(&cookie).unwrap_err().to_string();
+        assert!(!error.contains("synthetic-cookie"));
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -496,7 +496,7 @@ fn connect_socket_with_timeout(raw: &str, deadline_budget: Duration) -> Result<S
     }
     unreachable!()
 }
-fn operation(v: Value) -> Result<Value, String> {
+pub(crate) fn operation(v: Value) -> Result<Value, String> {
     operation_with_ws_timeout(v, WEBSOCKET_CONNECT_TIMEOUT)
 }
 

@@ -332,18 +332,24 @@ fn actor_forks_root_attribute_stores_and_observes_later_root_mutations() {
     let mut runtime = Runtime::new(actor_attribute_world(), 32).unwrap();
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut initial = Value::Null;
+    let mut last_response = Value::Null;
     while Instant::now() < deadline {
         let response = exec(
             &mut runtime,
             "return workspace.AttributeActor.AttributeReader:GetAttribute('initialValue'), workspace.AttributeActor.AttributeReader:GetAttribute('nullRead'), workspace.AttributeActor.AttributeReader:GetAttribute('unknownMissingRejected')",
         );
         initial = response["values"].clone();
+        last_response = response;
         if initial == json!([73.0, true, true]) {
             break;
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    assert_eq!(initial, json!([73.0, true, true]));
+    assert_eq!(
+        initial,
+        json!([73.0, true, true]),
+        "last response: {last_response}"
+    );
 
     exec(
         &mut runtime,

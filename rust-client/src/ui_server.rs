@@ -904,17 +904,7 @@ fn serve_asset(
 /// it only for the lifetime of the local UI process.
 pub fn random_ui_key() -> io::Result<String> {
     let mut bytes = [0u8; 32];
-    #[cfg(unix)]
-    {
-        std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
-    }
-    #[cfg(not(unix))]
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "OS random token provider unavailable",
-        ));
-    }
+    rove_client_core::entropy::fill(&mut bytes)?;
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
     Ok(bytes
         .iter()
