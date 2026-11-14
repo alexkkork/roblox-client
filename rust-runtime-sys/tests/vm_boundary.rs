@@ -39,6 +39,14 @@ fn rust_ffi_layout_matches_pinned_vm_headers() {
 }
 
 #[test]
+fn mlua_flag_adapter_links_and_rejects_unknown_flags() {
+    // This lookup does not mutate the global registry, so it is also safe when
+    // the other VM tests run concurrently. MSVC links this API even if unused.
+    assert!(Lua::set_fflag("RoveNonexistentFlagForAbiTest", false).is_err());
+    assert!(Lua::set_fflag("invalid\0flag", true).is_err());
+}
+
+#[test]
 fn compiler_emits_bytecode_for_text() {
     let bytecode = unsafe { rove_runtime_sys::ffi::luau_compile(b"return 42", Default::default()) };
     assert!(!bytecode.is_empty());

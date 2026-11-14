@@ -20,11 +20,14 @@ fn main() {
 
     let mut config = cmake::Config::new(&manifest);
     config.define("ROVE_LUAU_SOURCE", &luau);
-    config.define("CMAKE_BUILD_TYPE", "Release");
+    // Multi-configuration generators (Visual Studio) also need --config Release.
+    // Setting only CMAKE_BUILD_TYPE lets their Debug CRT override Rust's CRT.
+    config.profile("Release");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let static_crt = env::var("CARGO_CFG_TARGET_FEATURE")
             .unwrap_or_default().split(',').any(|feature| feature == "crt-static");
         config.static_crt(static_crt);
+        config.define("CMAKE_MSVC_RUNTIME_LIBRARY", if static_crt { "MultiThreaded" } else { "MultiThreadedDLL" });
     }
     let dst = config.build();
     println!(

@@ -1,7 +1,27 @@
 #include "lua.h"
 #include "luacode.h"
+#include "Luau/Common.h"
 
 #include <cstddef>
+#include <cstring>
+
+// MLua expects the small FFlag adapter normally supplied by luau0-src.
+// Resolve the pinned VM's real registry; an unknown name is never accepted.
+// Like upstream, callers must configure flags before creating any VM.
+extern "C" int luau_setfflag(const char* name, int value)
+{
+    if (!name)
+        return 0;
+    for (auto* flag = Luau::FValue<bool>::list; flag; flag = flag->next)
+    {
+        if (std::strcmp(flag->name, name) == 0)
+        {
+            flag->value = value != 0;
+            return 1;
+        }
+    }
+    return 0;
+}
 
 extern "C" int rove_luau_registry_index()
 {
