@@ -8,6 +8,9 @@ mod codecs;
 pub mod connection_probe;
 mod decompiler;
 pub mod engine_attributes;
+// Only the legacy C++ host installs callback tables. The Rust host calls the
+// shared engine operations directly and must not link those old entry points.
+#[cfg(not(feature = "rust-host"))]
 pub mod engine_bridge;
 pub mod engine_classes;
 pub mod engine_color3;

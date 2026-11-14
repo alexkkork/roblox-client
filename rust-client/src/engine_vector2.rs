@@ -1,6 +1,7 @@
 //! Pure Vector2 arithmetic owned by Rust; the Lua userdata and argument checks
 //! remain in the small native binding. No callback enters Lua or unwinds.
 use std::panic::{catch_unwind, AssertUnwindSafe};
+#[cfg(not(feature = "rust-host"))]
 use std::sync::Once;
 
 #[repr(C)]
@@ -25,13 +26,17 @@ pub struct Vector2Api {
     ) -> i32,
 }
 
+#[cfg(not(feature = "rust-host"))]
 const API: Vector2Api = Vector2Api { version: 1, apply };
+#[cfg(not(feature = "rust-host"))]
 static REGISTER: Once = Once::new();
 
+#[cfg(not(feature = "rust-host"))]
 unsafe extern "C" {
     fn local_luau_set_rust_vector2_api(api: *const Vector2Api) -> i32;
 }
 
+#[cfg(not(feature = "rust-host"))]
 pub fn install() {
     REGISTER.call_once(|| {
         // SAFETY: API is immutable static storage and stays alive for the process.

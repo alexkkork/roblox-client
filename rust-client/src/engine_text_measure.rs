@@ -79,6 +79,7 @@ pub(crate) fn measure(raw: &[u8]) -> Result<[f64; 2], String> {
     Err("Local text measurement backend is unavailable on this platform".into())
 }
 
+#[cfg(not(feature = "rust-host"))]
 #[repr(C)]
 struct TextMeasureApi {
     version: u32,
@@ -117,11 +118,14 @@ unsafe extern "C" fn bounds(
     }
 }
 
+#[cfg(not(feature = "rust-host"))]
 static API: TextMeasureApi = TextMeasureApi { version: 1, bounds };
+#[cfg(not(feature = "rust-host"))]
 extern "C" {
     fn local_luau_set_rust_text_measure_api(api: *const TextMeasureApi) -> i32;
 }
 
+#[cfg(not(feature = "rust-host"))]
 pub(crate) fn install() {
     // The immutable static callback table outlives all native VM instances.
     assert_eq!(
