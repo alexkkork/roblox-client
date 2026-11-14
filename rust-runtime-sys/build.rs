@@ -25,9 +25,21 @@ fn main() {
     config.profile("Release");
     if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let static_crt = env::var("CARGO_CFG_TARGET_FEATURE")
-            .unwrap_or_default().split(',').any(|feature| feature == "crt-static");
+            .unwrap_or_default()
+            .split(',')
+            .any(|feature| feature == "crt-static");
         config.static_crt(static_crt);
-        config.define("CMAKE_MSVC_RUNTIME_LIBRARY", if static_crt { "MultiThreaded" } else { "MultiThreadedDLL" });
+        config.define(
+            "CMAKE_MSVC_RUNTIME_LIBRARY",
+            if static_crt {
+                "MultiThreaded"
+            } else {
+                "MultiThreadedDLL"
+            },
+        );
+        // cmake-rs otherwise replaces MSVC's Release flags with its CRT flags.
+        // Keep the VM optimized even inside an unoptimized Cargo test build.
+        config.define("CMAKE_CXX_FLAGS_RELEASE", "/O2 /DNDEBUG");
     }
     let dst = config.build();
     println!(
