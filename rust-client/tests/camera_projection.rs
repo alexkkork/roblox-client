@@ -308,10 +308,28 @@ fn old_viewport_receipts_feed_camera_and_gui_the_same_surface() {
 }
 
 fn imported() -> Runtime {
-    Runtime::new(json!({"version":1,"sequence":1,"display":{"size":[800,600]},"services":{"Workspace":"ws"},"nodes":[
+    imported_display(json!({"size":[800,600]}))
+}
+
+fn imported_display(display: Value) -> Runtime {
+    Runtime::new(json!({"version":1,"sequence":1,"display":display,"services":{"Workspace":"ws"},"nodes":[
         {"id":"ws","class_name":"Workspace","name":"Workspace","parent":null,"properties":{"CurrentCamera":{"$ref":"camera"}}},
         {"id":"camera","class_name":"Camera","name":"Camera","parent":"ws","properties":{"CFrame":{"$cframe":{"position":[0,0,0],"rotation":[1,0,0,0,1,0,0,0,1]}},"FieldOfView":90,"FieldOfViewMode":{"$enum":{"type":"FieldOfViewMode","name":"Diagonal","value":1}},"ViewStretch":1,"NearPlaneZ":-0.25}}
     ]}),32).unwrap()
+}
+
+#[test]
+fn one_pixel_active_received_camera_preserves_its_lens_on_the_next_resize() {
+    let mut r = imported_display(json!({"size":[1,1]}));
+    execute(
+        &mut r,
+        "c=workspace.CurrentCamera;assert(c.FieldOfView==90);diagonal=c.DiagonalFieldOfView",
+    );
+    resize(&mut r, 2, json!({"size":[800,600]}));
+    execute(
+        &mut r,
+        "assert(c.FieldOfView<90);assert(math.abs(c.DiagonalFieldOfView-diagonal)<.0001)",
+    );
 }
 
 #[test]

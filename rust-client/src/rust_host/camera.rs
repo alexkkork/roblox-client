@@ -288,6 +288,13 @@ fn update_surface(ctx: &WorldRef, supplied_fov: &[&str]) -> mlua::Result<Vec<(St
     }
     let before = surface(ctx, &id);
     if before == next {
+        // An active 1x1 surface still counts as initialized. Otherwise the
+        // next resize of a received camera looks like its first activation.
+        ctx.borrow_mut()
+            .camera_state
+            .surfaces
+            .entry(id)
+            .or_insert(next);
         return Ok(vec![]);
     }
     let imported = {
