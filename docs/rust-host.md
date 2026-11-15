@@ -36,6 +36,10 @@ memory budget. Their remote request IDs are routed back to the issuing VM;
 unknown or mismatched responses do not complete a waiter. World metadata
 changes emit the same service and loaded-state signals as the old host.
 
+[Editable animation curves](animation-curves.md) provide scalar, rotation,
+vector and Euler-rotation key editing and sampling in Rust. Clones retain
+independent edits, and Actor commands reject stale curve state.
+
 [Model scaling](model-scaling.md) adds absolute ScaleTo/GetScale, original-value
 restoration, clone baselines, dimensional force/constraint rules, and atomic
 Actor replay. Animator pose scaling remains an explicit unsupported case.

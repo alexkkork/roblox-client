@@ -78,6 +78,7 @@ pub struct World {
     pub snapshot: Json,
     pub(crate) camera_state: super::camera::CameraState,
     pub(crate) scale_state: super::movement::ScaleState,
+    pub(crate) curve_state: super::curves::CurveState,
     pub sequence: u64,
     lightweight_assets: bool,
     pub effects: JsonMap<String, Json>,
@@ -110,6 +111,7 @@ impl World {
             snapshot: self.snapshot.clone(),
             camera_state: self.camera_state.clone(),
             scale_state: self.scale_state.clone(),
+            curve_state: self.curve_state.clone(),
             sequence: self.sequence,
             lightweight_assets: self.lightweight_assets,
             effects: JsonMap::new(),
@@ -216,6 +218,8 @@ impl World {
             .sync_from_root(&root.camera_state, &self.local_namespace);
         self.scale_state
             .sync_from_root(&root.scale_state, &self.local_namespace);
+        self.curve_state
+            .sync_from_root(&root.curve_state, &self.local_namespace);
         self.sequence = root.sequence;
         self.local_revision = self.local_revision.max(root.local_revision);
         self.next_local_id = self.next_local_id.max(root.next_local_id);
@@ -250,6 +254,7 @@ impl World {
             snapshot: Json::Null,
             camera_state: super::camera::CameraState::default(),
             scale_state: super::movement::ScaleState::default(),
+            curve_state: super::curves::CurveState::default(),
             sequence,
             lightweight_assets: root
                 .get("lightweight_assets")
@@ -1213,6 +1218,7 @@ pub fn apply_delta_with_lua(
     ctx.borrow_mut()
         .apply_delta(delta, shared)
         .map_err(mlua::Error::RuntimeError)?;
+    super::curves::cleanup_received(ctx);
     super::camera::refresh_after_delta(lua, ctx, delta, camera_before)?;
     resolve_instance_handle_waiters(lua, ctx)?;
     refresh_globals(lua, ctx)?;
@@ -1557,6 +1563,9 @@ pub fn sync_actor_fork_with_lua(
                         )?;
                     }
                 }
+            }
+            "curve_keys" => {
+                super::curves::replay_events(lua, actor_world, row)?;
             }
             "attribute" => {
                 let (Some(id), Some(name)) = (
@@ -2636,6 +2645,18 @@ pub fn set_property(
     Ok(())
 }
 
+pub(crate) fn commit_curve_state(ctx: &WorldRef, id: &str, state: super::curves::CurveState) -> mlua::Result<()> {
+    let mut world = ctx.borrow_mut();
+    if !world.nodes.get(id).is_some_and(|node| !node.destroyed) {
+        return Err(mlua::Error::RuntimeError("curve instance is unavailable or destroyed".into()));
+    }
+    world.local_revision = world.local_revision.wrapping_add(1).max(1);
+    let revision = world.local_revision;
+    world.nodes.get_mut(id).unwrap().local_revision = revision;
+    world.curve_state = state;
+    Ok(())
+}
+
 pub fn is_a(ctx: &WorldRef, id: &str, class: &str) -> bool {
     let world = ctx.borrow();
     let Some(node) = world.nodes.get(id) else {
@@ -2901,7 +2922,7 @@ pub(crate) fn create_animation_node(
     parent: Option<&str>,
     properties: JsonMap<String, Json>,
 ) -> mlua::Result<Value> {
-    if !matches!(class, "KeyframeSequence" | "Keyframe" | "Pose" | "NumberPose" | "KeyframeMarker" | "AnimationRigData" | "Folder")
+    if !matches!(class, "KeyframeSequence" | "Keyframe" | "Pose" | "NumberPose" | "KeyframeMarker" | "AnimationRigData" | "Folder" | "FloatCurve")
         || name.len() > 1024
         || serde_json::to_vec(&properties).map_err(mlua::Error::external)?.len() > 64 * 1024
     {
@@ -3350,6 +3371,7 @@ pub fn apply_actor_create(
         .cloned()
         .unwrap_or_default();
     let scale_state = super::movement::import_scale_baseline(root, id, record)?;
+    let curve_state = super::curves::import_state(root, id, record)?;
     if data.get("server_owned").and_then(Json::as_bool) == Some(true)
         || data.get("destroyed").and_then(Json::as_bool) == Some(true)
     {
@@ -3417,6 +3439,7 @@ pub fn apply_actor_create(
         world.node_order.push(id.to_owned());
         world.nodes.insert(id.to_owned(), node.clone());
         world.scale_state = scale_state;
+        world.curve_state = curve_state;
         if local_service_supported(&node.class_name) {
             world
                 .services
@@ -3431,6 +3454,8 @@ pub fn apply_actor_create(
             "property_revisions":node.revisions,"destroyed":false,"server_owned":false
         }});
         mutation["actor_origin"] = json!(actor_id);
+        let curve = world.curve_state.record(id);
+        if !curve.is_null() { mutation["node"]["curve_state"] = curve; }
         world
             .effects
             .entry("mutations")
@@ -3620,20 +3645,23 @@ pub fn clone_instance(lua: &Lua, ctx: &WorldRef, root_id: &str) -> mlua::Result<
     }
     let root_clone = id_map[root_id].clone();
     let scale_state = super::movement::clone_scale_state(ctx, &id_map)?;
-    world_model_scale::check_actor_clone_journal(ctx, &clones, &scale_state)?;
+    let curve_state = super::curves::clone_state(ctx, &id_map)?;
+    world_model_scale::check_actor_clone_journal(ctx, &clones, &scale_state, &curve_state)?;
     {
         let mut world = ctx.borrow_mut();
         world.scale_state = scale_state;
+        world.curve_state = curve_state;
         for node in &clones {
             world.node_order.push(node.id.clone());
             world.nodes.insert(node.id.clone(), node.clone());
         }
     }
     for node in clones {
+        let record = world_model_scale::clone_record(&node,super::movement::export_scale_baseline(ctx,&node.id),ctx.borrow().curve_state.record(&node.id));
         emit(
             ctx,
             "mutations",
-            json!({"kind":"create","node":world_model_scale::clone_record(&node,super::movement::export_scale_baseline(ctx,&node.id))}),
+            json!({"kind":"create","node":record}),
         );
     }
     instance(lua, ctx, &root_clone)
@@ -3687,6 +3715,7 @@ pub fn destroy_instance(lua: &Lua, ctx: &WorldRef, root_id: &str) -> mlua::Resul
     }
     let mut mutation = json!({"kind":"destroy","ids":selected});
     for id in &selected { ctx.borrow_mut().scale_state.remove(id); }
+    for id in &selected { ctx.borrow_mut().curve_state.remove(id); }
     if actor_internal_revision {
         mutation["_base_local_revisions"] = Json::Object(base_revisions);
     }

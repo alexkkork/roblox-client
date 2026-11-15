@@ -331,7 +331,7 @@ fn order_value(value: Option<AnyUserData>) -> mlua::Result<usize> {
         }
     }
 }
-fn ordered_euler(x: f64, y: f64, z: f64, order: usize) -> mlua::Result<CFrameValue> {
+pub(crate) fn ordered_euler(x: f64, y: f64, z: f64, order: usize) -> mlua::Result<CFrameValue> {
     if ![x, y, z].iter().all(|v| v.is_finite()) {
         return Err(err("CFrame angle must be finite"));
     }

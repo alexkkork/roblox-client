@@ -19,7 +19,7 @@ impl Write for Budget {
     }
 }
 
-pub(super) fn clone_record(node: &Node, baseline: Json) -> Json {
+pub(super) fn clone_record(node: &Node, baseline: Json, curve: Json) -> Json {
     let mut record = json!({"id":node.id,"class_name":node.class_name,"name":node.name,
         "parent":node.parent,"properties":node.properties,"attributes":node.attributes,
         "attributes_known":node.attributes_known,"collection_tags":node.collection_tags,
@@ -28,12 +28,16 @@ pub(super) fn clone_record(node: &Node, baseline: Json) -> Json {
     if !baseline.is_null() {
         record["model_scale_baseline"] = baseline;
     }
+    if !curve.is_null() {
+        record["curve_state"] = curve;
+    }
     record
 }
 pub(super) fn check_actor_clone_journal(
     ctx: &WorldRef,
     nodes: &[Node],
     state: &super::super::movement::ScaleState,
+    curves: &super::super::curves::CurveState,
 ) -> mlua::Result<()> {
     if !uses_actor_namespace(ctx) {
         return Ok(());
@@ -56,7 +60,7 @@ pub(super) fn check_actor_clone_journal(
         serde_json::to_writer(&mut budget, rows).map_err(|_| error(()))?;
     }
     for node in nodes {
-        let row = json!({"kind":"create","node":clone_record(node,state.baseline(&node.id))});
+        let row = json!({"kind":"create","node":clone_record(node,state.baseline(&node.id),curves.record(&node.id))});
         serde_json::to_writer(&mut budget, &row).map_err(|_| error(()))?;
         budget.write_all(b",").map_err(|_| error(()))?;
     }

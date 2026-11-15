@@ -756,6 +756,87 @@ fn install_brickcolor(lua: &Lua) -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FloatCurveKey {
+    pub time: f64,
+    pub value: f64,
+    pub interpolation: i32,
+    pub left: Option<f64>,
+    pub right: Option<f64>,
+}
+impl UserData for FloatCurveKey {
+    fn add_fields<F: UserDataFields<Self>>(f: &mut F) {
+        f.add_meta_field("__type", "FloatCurveKey");
+        f.add_field_method_get("Time", |_, v| Ok(v.time));
+        f.add_field_method_set("Time", |_, v, n: f64| {
+            v.time = n;
+            Ok(())
+        });
+        f.add_field_method_get("Value", |_, v| Ok(v.value));
+        f.add_field_method_set("Value", |_, v, n: f64| {
+            v.value = n;
+            Ok(())
+        });
+        f.add_field_method_get("Interpolation", |lua, v| {
+            super::enums::enum_item(
+                lua,
+                "KeyInterpolationMode",
+                ["Constant", "Linear", "Cubic"][v.interpolation as usize],
+            )
+        });
+        f.add_field_method_set("Interpolation", |_, v, n: AnyUserData| {
+            if !super::enums::enum_item_matches(&n, "KeyInterpolationMode")? {
+                return Err(err("Enum.KeyInterpolationMode expected"));
+            }
+            let n = super::enums::enum_item_value(&n)?;
+            if !(0..=2).contains(&n) {
+                return Err(err("Enum.KeyInterpolationMode expected"));
+            }
+            v.interpolation = n;
+            if n != 2 {
+                v.right = None;
+            }
+            Ok(())
+        });
+        f.add_field_method_get("LeftTangent", |_, v| Ok(v.left));
+        f.add_field_method_set("LeftTangent", |_, v, n: f64| {
+            v.left = Some(n);
+            Ok(())
+        });
+        f.add_field_method_get("RightTangent", |_, v| Ok(v.right));
+        f.add_field_method_set("RightTangent", |_, v, n: f64| {
+            if v.interpolation != 2 {
+                return Err(err("RightTangent requires Cubic interpolation"));
+            }
+            v.right = Some(n);
+            Ok(())
+        });
+    }
+}
+fn float_key_new(lua: &Lua, args: mlua::Variadic<Value>) -> Result<AnyUserData> {
+    if !(2..=3).contains(&args.len()) {
+        return Err(err(
+            "FloatCurveKey.new expects time, value, and optional interpolation mode",
+        ));
+    }
+    let interpolation = if args.len() == 3 {
+        enum_num(
+            &args[2],
+            "KeyInterpolationMode",
+            &[("Constant", 0), ("Linear", 1), ("Cubic", 2)],
+        )?
+    } else {
+        2
+    };
+    lua.create_userdata(FloatCurveKey {
+        time: value_number(args[0].clone())?,
+        value: value_number(args[1].clone())?,
+        interpolation,
+        left: None,
+        right: None,
+    })
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct RotationCurveKey {
     pub time: f64,
@@ -1000,6 +1081,11 @@ fn encode_codec(u: &AnyUserData) -> Result<Option<Json>> {
     if let Ok(v) = u.borrow::<BrickColor>() {
         return Ok(Some(json!({"$brickcolor":v.number})));
     }
+    if let Ok(v) = u.borrow::<FloatCurveKey>() {
+        return Ok(Some(
+            json!({"$float_curve_key":[wire_number(v.time),wire_number(v.value),v.interpolation,v.left.map(wire_number),v.right.map(wire_number)]}),
+        ));
+    }
     if let Ok(v) = u.borrow::<RotationCurveKey>() {
         if !v.frame.rotation_known {
             return Err(err("RotationCurveKey rotation is unavailable"));
@@ -1080,6 +1166,38 @@ fn decode_brick(lua: &Lua, j: &Json) -> Result<Value> {
     Ok(Value::UserData(
         lua.create_userdata(BrickColor { number: n })?,
     ))
+}
+fn decode_float_key(lua: &Lua, j: &Json) -> Result<Value> {
+    let a = decode_object(j, "$float_curve_key")?
+        .as_array()
+        .filter(|a| a.len() == 5)
+        .ok_or_else(|| err("invalid FloatCurveKey"))?;
+    let interpolation = a[2]
+        .as_i64()
+        .filter(|v| (0..=2).contains(v))
+        .ok_or_else(|| err("invalid FloatCurveKey interpolation"))? as i32;
+    let left = if a[3].is_null() {
+        None
+    } else {
+        Some(number_json(&a[3])?)
+    };
+    let right = if a[4].is_null() {
+        None
+    } else {
+        if interpolation != 2 {
+            return Err(err(
+                "FloatCurveKey right tangent requires Cubic interpolation",
+            ));
+        }
+        Some(number_json(&a[4])?)
+    };
+    Ok(Value::UserData(lua.create_userdata(FloatCurveKey {
+        time: number_json(&a[0])?,
+        value: number_json(&a[1])?,
+        interpolation,
+        left,
+        right,
+    })?))
 }
 fn decode_rotation(lua: &Lua, j: &Json) -> Result<Value> {
     let a = decode_object(j, "$rotation_curve_key")?
@@ -1223,6 +1341,10 @@ pub fn install(lua: &Lua) -> Result<()> {
     tw.set_readonly(true);
     lua.globals().set("TweenInfo", tw)?;
     install_brickcolor(lua)?;
+    let fk = lua.create_table()?;
+    fk.set("new", lua.create_function(float_key_new)?)?;
+    fk.set_readonly(true);
+    lua.globals().set("FloatCurveKey", fk)?;
     let rk = lua.create_table()?;
     rk.set("new", lua.create_function(rotation_key_new)?)?;
     rk.set_readonly(true);
@@ -1242,6 +1364,7 @@ pub fn install(lua: &Lua) -> Result<()> {
         ("$color_sequence", "ColorSequence", decode_color_seq),
         ("$tween_info", "TweenInfo", decode_tween),
         ("$brickcolor", "BrickColor", decode_brick),
+        ("$float_curve_key", "FloatCurveKey", decode_float_key),
         ("$rotation_curve_key", "RotationCurveKey", decode_rotation),
         ("$path_waypoint", "PathWaypoint", decode_waypoint),
     ] {

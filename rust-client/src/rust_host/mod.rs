@@ -9,6 +9,7 @@ pub mod actors;
 pub mod bindables;
 pub mod camera;
 pub mod cframe;
+pub(crate) mod curves;
 pub mod closures;
 pub mod drawing;
 pub mod enums;
@@ -59,6 +60,7 @@ pub fn install_bindings(lua: &mlua::Lua, ctx: &world::WorldRef) -> mlua::Result<
     signals::install(lua, ctx)?;
     idle::install(lua, ctx)?;
     world::install(lua, ctx)?;
+    curves::install(ctx);
     bindables::install(lua, ctx)?;
     misc_values::install(lua, ctx)?;
     geometry::install(lua, ctx)?;

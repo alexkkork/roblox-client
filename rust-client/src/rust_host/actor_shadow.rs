@@ -318,6 +318,15 @@ pub fn merge_actor_journal(
                 world::pose_events(lua, root_world, changes)?;
                 report.applied += 1;
             }
+            "curve_keys" => {
+                let cursor = mutation_rows(root_world);
+                if super::curves::replay(lua, root_world, actor_world, row)? {
+                    tag_new_root_mutations(root_world, cursor, actor_id)?;
+                    report.applied += 1;
+                } else {
+                    report.conflicts.push("curve_keys:stale_input".into());
+                }
+            }
             "model_scale" => {
                 let cursor = mutation_rows(root_world);
                 if super::movement::replay_scale(lua, root_world, actor_world, row)? {
@@ -387,12 +396,10 @@ pub fn merge_actor_journal(
             }
             "destroy" => match destroy(lua, root_world, actor_id, row) {
                 Ok(()) => report.applied += 1,
-                Err(error)
-                    if error
-                        .to_string()
-                        .starts_with("stale Actor destroy mutation") =>
+                Err(mlua::Error::RuntimeError(message))
+                    if message.starts_with("stale Actor destroy mutation") =>
                 {
-                    report.conflicts.push(error.to_string());
+                    report.conflicts.push(message);
                 }
                 Err(error) => return Err(error),
             },

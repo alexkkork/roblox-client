@@ -34,6 +34,7 @@ Copy-Item 'docs/bulk-move.md' (Join-Path $package 'bulk-move.md') -Force
 Copy-Item 'docs/joint-poses.md' (Join-Path $package 'joint-poses.md') -Force
 Copy-Item 'docs/animation-poses.md' (Join-Path $package 'animation-poses.md') -Force
 Copy-Item 'docs/animation-loading.md' (Join-Path $package 'animation-loading.md') -Force
+Copy-Item 'docs/animation-curves.md' (Join-Path $package 'animation-curves.md') -Force
 Copy-Item 'THIRD_PARTY.md' $package -Force
 $licenses = Join-Path $package 'licenses'
 New-Item -ItemType Directory -Force $licenses | Out-Null
