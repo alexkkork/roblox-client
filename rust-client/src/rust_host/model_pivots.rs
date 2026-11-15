@@ -13,6 +13,8 @@ const MAX_CACHE_BYTES: usize = 4 * 1024 * 1024;
 
 #[path = "attachment_transforms.rs"]
 pub(crate) mod attachments;
+#[path = "bulk_move.rs"]
+pub(crate) mod bulk_move;
 #[path = "model_scaling.rs"]
 pub(crate) mod scaling;
 
@@ -628,6 +630,7 @@ fn set_offset(lua: &Lua, ctx: &WorldRef, id: &str, value: Value) -> mlua::Result
 }
 pub(super) fn install(ctx: &WorldRef) {
     scaling::install(ctx);
+    bulk_move::install(ctx);
     attachments::install(ctx);
     world::register_method(ctx, "PVInstance", "GetPivot", get_pivot);
     world::register_method(ctx, "PVInstance", "PivotTo", pivot_to);

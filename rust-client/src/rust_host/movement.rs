@@ -16,6 +16,10 @@ use std::cell::Cell;
 
 #[path = "model_pivots.rs"]
 mod pivots;
+#[path = "part_transform_aliases.rs"]
+mod part_aliases;
+pub(crate) use part_aliases::{alias as part_transform_alias, clear_overrides as clear_received_part_overrides, received_events as received_part_alias_events};
+pub(crate) use pivots::bulk_move::replay as replay_bulk_move;
 pub(crate) use pivots::attachments::{
     attachment_frame, attachment_origin, clear_received_attachment_overrides,
     preserve_attachment_pose, refresh as refresh_attachments, replay_attachment_pose,
@@ -345,6 +349,9 @@ fn set_part_transform(
             };
         }
         _ => unreachable!(),
+    }
+    if key == "CFrame" && pivots::bulk_move::move_rigid_frame(lua, ctx, id, &frame)? {
+        return Ok(true);
     }
     store_frame(lua, ctx, id, frame)?;
     Ok(true)

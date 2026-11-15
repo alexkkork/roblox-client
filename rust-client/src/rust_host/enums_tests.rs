@@ -10,6 +10,25 @@ fn runtime() -> Lua {
 }
 
 #[test]
+fn enum_lookup_accepts_colon_and_bound_dot_calls() {
+    runtime()
+        .load(
+            r#"
+        local e=Enum.BulkMoveMode
+        assert(e:FromName("FireAllEvents")==e.FireAllEvents)
+        assert(e:FromValue(1)==e.FireCFrameChanged)
+        assert(e.FromName("FireAllEvents")==e.FireAllEvents)
+        assert(e.FromValue(1)==e.FireCFrameChanged)
+        assert(e:FromName("missing")==nil and e:FromValue(-1)==nil)
+        assert(not pcall(e.FromName,Enum.Material,"FireAllEvents"))
+        assert(not pcall(e.FromValue,e,1,2))
+    "#,
+        )
+        .exec()
+        .unwrap();
+}
+
+#[test]
 fn enum_items_are_canonical_read_only_and_have_aliases() {
     let lua = runtime();
     let (same, val, name, type_name, alias, count): (bool, i32, String, String, bool, usize) = lua

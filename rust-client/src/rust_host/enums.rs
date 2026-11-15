@@ -1,6 +1,7 @@
 //! Read-only Enum and EnumItem objects, backed by the pinned native enum catalog.
 use mlua::{
-    AnyUserData, Lua, MetaMethod, Result, UserData, UserDataFields, UserDataMethods, Value,
+    AnyUserData, FromLua, Lua, MetaMethod, MultiValue, Result, UserData, UserDataFields,
+    UserDataMethods, Value,
 };
 use serde_json::{json, Value as Json};
 use std::collections::BTreeMap;
@@ -154,6 +155,27 @@ fn catalog() -> &'static BTreeMap<String, Vec<Item>> {
     })
 }
 
+// Accept both the engine's colon form and the host's existing bound dot form.
+fn lookup_argument(name: &str, mut args: MultiValue) -> Result<Value> {
+    if args.len() == 2 {
+        let valid = match args.pop_front() {
+            Some(Value::UserData(value)) => {
+                value.borrow::<EnumType>().is_ok_and(|e| e.name == name)
+            }
+            _ => false,
+        };
+        if !valid {
+            return Err(mlua::Error::RuntimeError("incorrect Enum receiver".into()));
+        }
+    }
+    if args.len() != 1 {
+        return Err(mlua::Error::RuntimeError(
+            "Enum lookup expects one argument".into(),
+        ));
+    }
+    Ok(args.pop_front().unwrap())
+}
+
 impl UserData for EnumType {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         fields.add_meta_field("__type", "Enum");
@@ -173,7 +195,8 @@ impl UserData for EnumType {
                 if key == "FromName" {
                     let name = this.name.clone();
                     return Ok(Value::Function(lua.create_function(
-                        move |lua, value: String| {
+                        move |lua, args: MultiValue| {
+                            let value = String::from_lua(lookup_argument(&name, args)?, lua)?;
                             let lookup = enum_alias(&name, &value);
                             Ok(
                                 match enum_type_item_table(lua, &name)
@@ -190,7 +213,8 @@ impl UserData for EnumType {
                 if key == "FromValue" {
                     let name = this.name.clone();
                     return Ok(Value::Function(lua.create_function(
-                        move |lua, value: f64| {
+                        move |lua, args: MultiValue| {
+                            let value = f64::from_lua(lookup_argument(&name, args)?, lua)?;
                             let item = catalog()
                                 .get(&name)
                                 .and_then(|items| items.iter().find(|it| it.value as f64 == value));

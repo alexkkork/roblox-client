@@ -22,6 +22,7 @@ pub mod instance_cache;
 pub mod instance_helpers;
 pub mod integrity;
 pub mod interactions;
+pub(crate) mod joint_graph;
 pub mod lifecycle;
 pub mod misc_values;
 pub mod movement;
@@ -61,6 +62,7 @@ pub fn install_bindings(lua: &mlua::Lua, ctx: &world::WorldRef) -> mlua::Result<
     misc_values::install(lua, ctx)?;
     geometry::install(lua, ctx)?;
     movement::install(lua, ctx)?;
+    joint_graph::install(ctx);
     input::install(lua, ctx)?;
     gui::install(lua, ctx)?;
     camera::install(lua, ctx)?;

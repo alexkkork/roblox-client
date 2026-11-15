@@ -162,7 +162,7 @@ pub fn connect_owned(
     owner: impl Into<String>,
     once: bool,
 ) -> Result<u64> {
-    super::movement::watch_attachment_signal(lua, ctx, id, key)?;
+    world::watch_property_signal(lua, ctx, id, key)?;
     let hub = app_hub(lua)?;
     let mut hub = hub.borrow_mut();
     let key = (world_key(ctx), id.to_owned(), key.to_owned());
@@ -562,7 +562,7 @@ impl UserData for SignalHandle {
                             mlua::Error::RuntimeError("local signal hub has been released".into())
                         })?;
                         if let Some(world) = world.upgrade() {
-                            super::movement::watch_attachment_signal(lua, &world, &signal_key.1, &signal_key.2)?;
+                            world::watch_property_signal(lua, &world, &signal_key.1, &signal_key.2)?;
                         }
                         lua.create_userdata(connect_to(lua, &hub, &signal_key, callback, once)?)
                     })?;
@@ -574,7 +574,7 @@ impl UserData for SignalHandle {
                     let world = this.world.clone();
                     let register = lua.create_function(move |lua, ()| {
                         if let Some(world) = world.upgrade() {
-                            super::movement::watch_attachment_signal(lua, &world, &key.1, &key.2)?;
+                            world::watch_property_signal(lua, &world, &key.1, &key.2)?;
                         }
                         register_waiter(lua, key.clone(), weak.clone())
                     })?;

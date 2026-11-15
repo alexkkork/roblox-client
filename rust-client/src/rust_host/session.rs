@@ -420,7 +420,7 @@ impl Vm {
         super::remotes::dispatch_client_invocations(&self.lua, &self.world)
             .map_err(|e| e.to_string())?;
         playback::step(&self.lua, &self.world, elapsed).map_err(|e| e.to_string())?;
-        super::movement::refresh_attachments(&self.lua).map_err(|e| e.to_string())?;
+        world::refresh_derived_properties(&self.lua).map_err(|e| e.to_string())?;
         let run_service = self.world.borrow().services.get("RunService").cloned();
         if let Some(id) = run_service {
             for key in [

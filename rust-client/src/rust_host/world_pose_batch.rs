@@ -203,11 +203,11 @@ pub(crate) fn apply_pose_command(
                 rows.push(row);
             }
         }
-        if actor {
+        if actor && command.is_none() {
             actor_writes.push(json!({"id":write.id,"fields":write.fields,"_base_local_revision":node.local_revision}));
         }
     }
-    if actor && !actor_writes.is_empty() {
+    if actor && !writes.is_empty() {
         rows.push(command.unwrap_or_else(
             || json!({"kind":"pose_batch","writes":actor_writes,"cframe_only":cframe_only}),
         ));
@@ -263,7 +263,7 @@ pub(crate) fn pose_events(
     for (id, key) in changes {
         emit_property_changed_direct(lua, ctx, &id, &key)?;
     }
-    super::super::movement::refresh_attachments(lua)
+    refresh_derived_properties(lua)
 }
 
 #[cfg(test)]

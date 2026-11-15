@@ -778,6 +778,7 @@ impl World {
                         .get_mut(&id)
                         .ok_or("set references unknown node")?;
                     super::movement::clear_received_attachment_overrides(node, &fields, action_sequence)?;
+                    super::movement::clear_received_part_overrides(node, &fields);
                     for (key, value) in fields {
                         let alias = super::world_aliases::canonical_key(&node.class_name, &key);
                         if alias.is_some() {
@@ -1072,7 +1073,7 @@ pub(crate) fn node_property(node: &Node, key: &str) -> Option<Json> {
     node.properties.get(key).cloned()
 }
 
-fn attribute_value_eq(left: &Json, right: &Json) -> bool {
+pub(crate) fn attribute_value_eq(left: &Json, right: &Json) -> bool {
     match (left, right) {
         (Json::Number(a), Json::Number(b)) => a.as_f64() == b.as_f64(),
         (Json::Array(a), Json::Array(b)) => {
@@ -1428,7 +1429,8 @@ pub fn apply_delta_with_lua(
             _ => {}
         }
     }
-    super::movement::refresh_attachments(lua)
+    super::movement::received_part_alias_events(lua,ctx,&before,actions,starting_sequence)?;
+    refresh_derived_properties(lua)
 }
 
 /// Refresh an Actor fork from the root after another VM committed local state,
@@ -1592,7 +1594,7 @@ pub fn sync_actor_fork_with_lua(
             _ => {}
         }
     }
-    super::movement::refresh_attachments(lua)
+    refresh_derived_properties(lua)
 }
 
 fn fire_attribute_changed(lua: &Lua, ctx: &WorldRef, id: &str, name: &str) -> mlua::Result<()> {
@@ -2217,6 +2219,9 @@ pub fn get_property(ctx: &WorldRef, id: &str, key: &str) -> mlua::Result<Json> {
     if let Some(value) = node.local_overrides.get(key) {
         return Ok(value.clone());
     }
+    if let Some(value) = super::movement::part_transform_alias(node, key) {
+        return value;
+    }
     match key {
         "Name" => return Ok(json!(node.name)),
         "ClassName" => return Ok(json!(node.class_name)),
@@ -2280,6 +2285,9 @@ pub fn get_property(ctx: &WorldRef, id: &str, key: &str) -> mlua::Result<Json> {
         )));
     }
     if !node.server_owned {
+        if let Some(default) = super::joint_graph::local_mode_default(&node.class_name, key) {
+            return Ok(default);
+        }
         if let Some(default) = local_part_mass_default(&node.class_name, key) {
             return Ok(default);
         }
@@ -2319,6 +2327,7 @@ pub fn get_property_revision(ctx: &WorldRef, id: &str, key: &str) -> Option<u64>
 }
 
 fn property_origin(ctx: &WorldRef, id: &str, key: &str) -> mlua::Result<String> {
+    if let Some(origin) = super::joint_graph::origin(ctx, id, key) { return Ok(origin); }
     if let Some(origin) = super::movement::attachment_origin(ctx, id, key) {
         return Ok(origin);
     }
@@ -2426,12 +2435,12 @@ pub fn set_engine_property(
 
 pub fn emit_property_changed(lua: &Lua, ctx: &WorldRef, id: &str, key: &str) -> mlua::Result<()> {
     emit_property_changed_direct(lua, ctx, id, key)?;
-    super::movement::refresh_attachments(lua)
+    refresh_derived_properties(lua)
 }
 pub(crate) fn emit_property_changed_direct(
     lua: &Lua, ctx: &WorldRef, id: &str, key: &str,
 ) -> mlua::Result<()> {
-    if super::movement::attachment_transform_property(ctx, id, key) {
+    if super::movement::attachment_transform_property(ctx, id, key) || super::joint_graph::derived_property(ctx, id, key) {
         return Ok(());
     }
     let mut args = MultiValue::new();
@@ -2655,6 +2664,21 @@ pub fn ordered_ids(ctx: &WorldRef) -> Vec<String> {
     ctx.borrow().node_order.clone()
 }
 
+pub(crate) fn ordered_matching_ids(ctx: &WorldRef, matches: impl Fn(&str) -> bool) -> Vec<String> {
+    let world = ctx.borrow();
+    world.node_order.iter().filter(|id| world.nodes.get(*id).is_some_and(|n| matches(&n.class_name))).cloned().collect()
+}
+
+pub(crate) fn watch_property_signal(lua: &Lua, ctx: &WorldRef, id: &str, key: &str) -> mlua::Result<()> {
+    super::movement::watch_attachment_signal(lua, ctx, id, key)?;
+    super::joint_graph::watch_signal(lua, ctx, id, key)
+}
+
+pub(crate) fn refresh_derived_properties(lua: &Lua) -> mlua::Result<()> {
+    super::movement::refresh_attachments(lua)?;
+    super::joint_graph::refresh(lua)
+}
+
 /// Actor-fork mutation journals carry private local revision fences until the
 /// host merges them into the root world.
 pub fn uses_actor_namespace(ctx: &WorldRef) -> bool {
@@ -2754,6 +2778,9 @@ fn local_part_mass_default(class: &str, key: &str) -> Option<Json> {
 
 fn constructor_default(class: &str, key: &str) -> mlua::Result<(Json, bool)> {
     let classes = constructors().get("classes");
+    if let Some(value) = super::joint_graph::local_mode_default(class, key) {
+        return Ok((value, true));
+    }
     if key == "FieldOfViewMode" && class_chain(class).iter().any(|c| c == "Camera") {
         return Ok((
             json!({"$enum":{"type":"FieldOfViewMode","name":"Vertical","value":0}}),
@@ -3047,6 +3074,7 @@ fn local_service_supported(class: &str) -> bool {
             | "VRService"
             | "SoundService"
             | "PhysicsService"
+            | "JointsService"
             | "EncodingService"
             | "PathfindingService"
             | "CorePackages"
