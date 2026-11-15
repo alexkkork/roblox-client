@@ -81,7 +81,7 @@ impl Clip {
                 .ok_or_else(|| err("invalid animation poses"))?
             {
                 count += 1;
-                if count > 20_000 {
+                if count > 65_536 {
                     return Err(err("animation pose sample limit exceeded"));
                 }
                 let path = pose["path"]
@@ -137,12 +137,34 @@ impl Clip {
                 keys.push(key);
             }
         }
-        let mut timeline = input.clone();
-        for frame in timeline["keyframes"].as_array_mut().unwrap() {
-            if let Some(frame) = frame.as_object_mut() {
-                frame.remove("poses");
-            }
-        }
+        // Keep timeline metadata without first cloning every numeric pose.
+        let mut timeline = Json::Object(
+            input
+                .as_object()
+                .ok_or_else(|| err("invalid animation clip"))?
+                .iter()
+                .filter(|(key, _)| key.as_str() != "keyframes")
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+        );
+        timeline["keyframes"] = Json::Array(
+            input["keyframes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|frame| {
+                    Json::Object(
+                        frame
+                            .as_object()
+                            .unwrap()
+                            .iter()
+                            .filter(|(key, _)| key.as_str() != "poses")
+                            .map(|(key, value)| (key.clone(), value.clone()))
+                            .collect(),
+                    )
+                })
+                .collect(),
+        );
         Ok(Self {
             timeline,
             channels: channels

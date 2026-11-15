@@ -40,6 +40,26 @@ fn complete(lua: &Lua, reference: &str, value: Json) {
     super::super::complete_animation_requests(lua, &json!([{"reference":reference,"clip":value}]))
         .unwrap();
 }
+
+#[test]
+fn unsupported_loaded_clips_fail_one_track_without_aborting_other_completions() {
+    let (lua,ctx)=setup();
+    lua.load("track:Play(0); good=load('good')").exec().unwrap();
+    super::super::complete_loaded_animation_requests(&lua,&json!([
+        {"reference":"test","clip":{"kind":"CurveAnimation"}},
+        {"reference":"good","clip":clip(4.)}
+    ])).unwrap();
+    lua.load("assert(not track.IsPlaying); assert(good.Length==2); assert(not pcall(function() track:Play() end))").exec().unwrap();
+    assert_eq!(ctx.borrow().effects["animation_load_errors"][0]["error"],"animation_clip_rejected");
+}
+
+#[test]
+fn manual_clip_completion_wins_over_a_delayed_loader_result() {
+    let (lua,_)=setup();
+    complete(&lua,"test",clip(4.));
+    super::super::complete_loaded_animation_requests(&lua,&json!([{"reference":"test","error":"animation_download_failed"}])).unwrap();
+    lua.load("assert(track.Length==2);track:Play(0)").exec().unwrap();
+}
 fn step(lua: &Lua, ctx: &WorldRef, delta: f64) {
     super::super::step(lua, ctx, delta).unwrap();
     assert!(

@@ -20,6 +20,22 @@ fn sparse_pose_channels_lerp_positions_and_slerp_rotations() {
         [4., 0., 0.]
     );
 }
+
+#[test]
+fn dense_body_clip_uses_compact_channels_without_retaining_pose_json() {
+    let frames=(0..210).map(|time|json!({"time":time as f64/30.0,"name":"Frame","markers":[],
+        "poses":(0..100).map(|channel|json!({"path":["Root",format!("Joint{channel}")],"position":[time as f64,0.,0.],
+            "rotation":[1.,0.,0.,0.,1.,0.,0.,0.,1.]})).collect::<Vec<_>>()})).collect::<Vec<_>>();
+    let clip = Clip::compile(&json!({"keyframes":frames})).unwrap();
+    assert_eq!(clip.channels.len(), 100);
+    assert_eq!(clip.channels[0].keys.len(), 210);
+    assert!((clip.channels[0].sample(1.5).unwrap().0.position[0] - 45.).abs() < 1e-6);
+    assert!(clip["keyframes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|f| f.get("poses").is_none()));
+}
 #[test]
 fn constant_keys_hold_until_the_next_key() {
     let mut value = input();

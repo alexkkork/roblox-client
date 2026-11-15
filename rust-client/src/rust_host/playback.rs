@@ -1895,6 +1895,51 @@ pub fn complete_animation_requests(lua: &Lua, responses: &Json) -> mlua::Result<
     let entries = responses
         .as_array()
         .ok_or_else(|| err("animation response batch must be an array"))?;
+    complete_animation_entries(lua, entries)
+}
+
+/// Route loader results independently. One unsupported asset must not abort a frame.
+pub fn complete_loaded_animation_requests(lua: &Lua, responses: &Json) -> mlua::Result<()> {
+    let rows = responses.as_array().filter(|r| r.len() <= 32)
+        .ok_or_else(|| err("invalid loaded animation batch"))?;
+    for response in rows {
+        if let Some(actor) = response.get("actor_id") {
+            let actor = actor.as_str().filter(|s| s.len() <= 512).ok_or_else(|| err("invalid animation actor"))?;
+            let generation = response["runtime_instance_generation"].as_u64().filter(|v| *v > 0)
+                .ok_or_else(|| err("invalid animation actor generation"))?;
+            super::actors::with_actor_generation(lua, actor, generation, |actor_lua| complete_loaded_one(actor_lua, response))?;
+        } else {
+            complete_loaded_one(lua, response)?;
+        }
+    }
+    Ok(())
+}
+
+fn complete_loaded_one(lua: &Lua, response: &Json) -> mlua::Result<()> {
+    let reference = response["reference"].as_str().filter(|s| !s.is_empty() && s.len() <= 512)
+        .ok_or_else(|| err("invalid loaded animation reference"))?;
+    let ctx = {
+        let Some(store) = lua.app_data_ref::<Store>() else { return Ok(()); };
+        // A caller may have supplied a manual response while the worker was loading.
+        if !store.animation_requested.contains(reference) || store.animation_clips.contains_key(reference) || store.animation_errors.contains(reference) {
+            return Ok(());
+        }
+        store.tracks.first().map(|t| t.borrow().world.clone())
+    };
+    let failure = match complete_animation_entries(lua, std::slice::from_ref(response)) {
+        Ok(()) => response.get("error").and_then(Json::as_str),
+        Err(_) => {
+            complete_animation_entries(lua, &[json!({"reference":reference,"error":"animation_clip_rejected"})])?;
+            Some("animation_clip_rejected")
+        }
+    };
+    if let (Some(ctx), Some(failure)) = (ctx, failure) {
+        world::emit(&ctx, "animation_load_errors", json!({"reference":reference,"error":failure}));
+    }
+    Ok(())
+}
+
+fn complete_animation_entries(lua: &Lua, entries: &[Json]) -> mlua::Result<()> {
     if entries.len() > 32 {
         return Err(err("animation response batch exceeds 32 entries"));
     }

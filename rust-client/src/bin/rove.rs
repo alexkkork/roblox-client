@@ -441,7 +441,7 @@ fn emit_output(response: &Value, quiet: bool) -> Result<(), String> {
 
 fn run(options: &Options, snapshot: Value) -> Result<Value, String> {
     let started = Instant::now();
-    let mut driver = Driver::with_text_backend(snapshot, options.memory, text_backend(options))?;
+    let mut driver = Driver::with_services(snapshot, options.memory, text_backend(options), animation_backend(options), None)?;
     for_deltas(options.deltas.as_deref(), |delta| {
         let result = driver.call(update_command(delta, 5))?;
         successful(&result)?;
@@ -569,11 +569,12 @@ fn replay_stream(options: &Options) -> Result<Value, String> {
             );
             compacted_nodes += compact_snapshot(&mut snapshot, &view)?;
             projection = Some(context);
-            let mut vm = Driver::with_text_backend_and_shared_world(
+            let mut vm = Driver::with_services(
                 snapshot,
                 options.memory,
                 text_backend(options),
-                &view,
+                animation_backend(options),
+                Some(&view),
             )?;
             let execution = vm.call(source_command(
                 source.take().ok_or("script already started")?,
@@ -692,7 +693,7 @@ fn finish_job(
 fn console(options: &Options, snapshot: Value) -> Result<Value, String> {
     let _lease = SessionLease::acquire(options.lease_root.as_ref().unwrap())?;
     let mut listener = ScriptConsole::bind(options.socket.as_ref().unwrap(), None)?;
-    let mut driver = Driver::with_text_backend(snapshot, options.memory, text_backend(options))?;
+    let mut driver = Driver::with_services(snapshot, options.memory, text_backend(options), animation_backend(options), None)?;
     for_deltas(options.deltas.as_deref(), |delta| {
         successful(&driver.call(update_command(delta, 10))?)
     })?;
@@ -775,6 +776,10 @@ fn content_root(options: &Options) -> Option<PathBuf> {
         .or_else(headless_luau::engine_services::local_text::default_content_root)
 }
 
+fn animation_backend(options: &Options) -> Arc<dyn headless_luau::animation_assets::AnimationBackend> {
+    Arc::new(headless_luau::animation_assets::AnimationAssetBackend::local(content_root(options)))
+}
+
 fn text_backend(
     options: &Options,
 ) -> Option<Arc<dyn headless_luau::engine_services::TextServiceBackend>> {
@@ -798,7 +803,7 @@ fn serve(options: &Options, snapshot: Value) -> Result<Value, String> {
         .map(|path| ScriptConsole::bind(path, None))
         .transpose()?;
     let content = content_root(options);
-    let runtime = Driver::with_text_backend(snapshot, options.memory, text_backend(options))?;
+    let runtime = Driver::with_services(snapshot, options.memory, text_backend(options), animation_backend(options), None)?;
     let mut session = SessionUi::new(runtime)?;
     if let Some(content) = content {
         session.set_content_root(content)?;
@@ -898,7 +903,7 @@ fn print_job(response: &Value) -> Result<(), String> {
 }
 
 fn repl(options: &Options, snapshot: Value) -> Result<Value, String> {
-    let mut driver = Driver::with_text_backend(snapshot, options.memory, text_backend(options))?;
+    let mut driver = Driver::with_services(snapshot, options.memory, text_backend(options), animation_backend(options), None)?;
     for_deltas(options.deltas.as_deref(), |delta| {
         successful(&driver.call(update_command(delta, 10))?)
     })?;

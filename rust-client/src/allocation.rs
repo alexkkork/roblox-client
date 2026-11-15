@@ -19,6 +19,7 @@ const MAX_RESPONSE: usize = 2 * 1024 * 1024;
 const MAX_CSRF_TOKEN: usize = 8 * 1024;
 const MAX_CERT_PINS: usize = 16;
 const ALLOWED_HOSTS: &[&str] = &[
+    "assetdelivery.roblox.com",
     "users.roblox.com",
     "games.roblox.com",
     "gamejoin.roblox.com",

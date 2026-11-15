@@ -36,6 +36,7 @@ const BATCH_BYTES: usize = 4 * 1024 * 1024;
 pub struct RuntimeConfig {
     source: String,
     memory: u32,
+    animation_backend: Option<Arc<dyn crate::animation_assets::AnimationBackend>>,
 }
 impl RuntimeConfig {
     #[cfg(test)]
@@ -43,6 +44,7 @@ impl RuntimeConfig {
         Self {
             source: source.into(),
             memory: 32,
+            animation_backend: None,
         }
     }
     pub fn from_file(path: &Path, memory: u32) -> Result<Self, String> {
@@ -62,7 +64,11 @@ impl RuntimeConfig {
             return Err("script exceeds 100 MiB".into());
         }
         let source = String::from_utf8(bytes).map_err(|_| "script must be UTF-8")?;
-        Ok(Self { source, memory })
+        Ok(Self { source, memory, animation_backend: None })
+    }
+    pub fn with_animation_backend(mut self, backend: Arc<dyn crate::animation_assets::AnimationBackend>) -> Self {
+        self.animation_backend = Some(backend);
+        self
     }
 }
 
@@ -944,10 +950,8 @@ fn vm_loop(
                 ready = snapshot["initial_replication_complete"] == true;
                 bound = snapshot["local_player"].is_string();
                 sequence = snapshot["sequence"].as_u64().unwrap_or(0);
-                vm = Some(match view.as_ref() {
-                    Some(view) => Runtime::new_with_shared_world(snapshot, config.memory, view)?,
-                    None => Runtime::new(snapshot, config.memory)?,
-                });
+                vm = Some(Runtime::with_animation_backend(snapshot, config.memory,
+                    config.animation_backend.clone().unwrap_or_else(crate::animation_assets::default_backend), view.as_ref())?);
                 initializations += 1;
             } else {
                 let delta = value;

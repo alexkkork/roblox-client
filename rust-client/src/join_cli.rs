@@ -291,6 +291,9 @@ pub fn run(args: &[String]) -> Result<Value, String> {
                         ready["transport"] = probe;
                     }
                     if let Some(seconds) = session_seconds {
+                        let runtime_config = runtime_config.map(|config| config.with_animation_backend(
+                            std::sync::Arc::new(crate::animation_assets::AnimationAssetBackend::authenticated(
+                                crate::engine_services::local_text::default_content_root(), session))));
                         let live = crate::live_session::run_with_options(
                             &allocation,
                             seconds,

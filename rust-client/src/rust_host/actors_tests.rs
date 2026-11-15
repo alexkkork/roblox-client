@@ -1,6 +1,8 @@
 use super::*;
 #[path = "joint_pose_runtime_tests.rs"]
 mod joint_pose_tests;
+#[path = "actor_animation_loading_tests.rs"]
+mod animation_loading_tests;
 
 fn setup() -> (Lua, WorldRef, SharedTableRegistry) {
     let snapshot = json!({

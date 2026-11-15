@@ -23,6 +23,9 @@ foreach ($folder in @('ui', 'examples')) {
 New-Item -ItemType Directory -Force (Join-Path $package 'tests/fixtures') | Out-Null
 Copy-Item 'tests/fixtures/world_snapshot.json' (Join-Path $package 'tests/fixtures') -Force
 Copy-Item 'tests/fixtures/camera_projection_snapshot.json' (Join-Path $package 'tests/fixtures') -Force
+$animations = Join-Path $package 'tests/fixtures/animations'
+if (Test-Path $animations) { Remove-Item $animations -Recurse -Force }
+Copy-Item 'tests/fixtures/animations' $animations -Recurse
 $fonts = Join-Path $package 'tests/fixtures/fonts'
 if (Test-Path $fonts) { Remove-Item $fonts -Recurse -Force }
 Copy-Item 'tests/fixtures/fonts' $fonts -Recurse
@@ -30,6 +33,7 @@ Copy-Item 'docs/windows.md' (Join-Path $package 'README.md') -Force
 Copy-Item 'docs/bulk-move.md' (Join-Path $package 'bulk-move.md') -Force
 Copy-Item 'docs/joint-poses.md' (Join-Path $package 'joint-poses.md') -Force
 Copy-Item 'docs/animation-poses.md' (Join-Path $package 'animation-poses.md') -Force
+Copy-Item 'docs/animation-loading.md' (Join-Path $package 'animation-loading.md') -Force
 Copy-Item 'THIRD_PARTY.md' $package -Force
 $licenses = Join-Path $package 'licenses'
 New-Item -ItemType Directory -Force $licenses | Out-Null

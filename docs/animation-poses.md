@@ -41,7 +41,8 @@ are not portable to another VM or Roblox Studio.
 The script performs 18 checks through the official Luau VM, including registration,
 blending, frame order, actual part movement and Bone world transforms. Host-supplied
 `animation_responses` can also provide the existing version-1 decoded clip format.
-The Rust client does not automatically download those assets yet.
+The Rust client now loads animation assets automatically; see
+[animation loading](animation-loading.md) for local content and authenticated live sessions.
 
 ## limits
 
@@ -63,7 +64,7 @@ parity. Relevant contracts: [Animator](https://roblox.github.io/avatar-evolution
 [local registration](https://create.roblox.com/docs/reference/engine/classes/KeyframeSequenceProvider).
 
 The clip cache is charged against a 16 MiB input budget and stores numeric channels
-without retaining duplicate JSON poses. Limits are 128 assets, 256 tracks, 20,000
+without retaining duplicate JSON poses. Limits are 128 assets, 256 tracks, 65,536
 pose samples per clip, 4,096 targets per frame, and 65,536 channel/binding evaluations
 per frame. Existing mutation, task and VM budgets still apply. Repeated identical
 evaluation failures are coalesced; error output is capped at 128 rows.

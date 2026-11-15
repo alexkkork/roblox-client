@@ -254,6 +254,10 @@ impl Vm {
             playback::complete_animation_requests(&self.lua, responses)
                 .map_err(|e| e.to_string())?;
         }
+        if let Some(responses) = command.get("loaded_animation_responses") {
+            playback::complete_loaded_animation_requests(&self.lua, responses)
+                .map_err(|e| e.to_string())?;
+        }
         let mut engine_pose = None;
         let mut engine_owned = None;
         match op {

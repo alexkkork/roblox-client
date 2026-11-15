@@ -2,6 +2,8 @@
 //! keep the VM on its owner thread. frontends send bounded commands
 //! instead of sharing the raw handle or copying the world into another vm.
 use crate::engine_services::{TextServiceBackend, TextServiceQueue};
+use crate::animation_assets::{self, AnimationBackend};
+use crate::animation_queue::AnimationQueue;
 use crate::engine_world_view::SharedProjectedWorldView;
 use crate::native::Session;
 use crate::render_projection::{project_frame, RenderProjection};
@@ -23,6 +25,8 @@ pub struct Runtime {
     text_backend: Option<Arc<dyn TextServiceBackend>>,
     text_measurements: std::rc::Rc<crate::engine_text_measure::Context>,
     text_service: Option<TextServiceQueue>,
+    animation_backend: Arc<dyn AnimationBackend>,
+    animation_service: Option<AnimationQueue>,
     local_errors: VecDeque<Value>,
     remote_client_replies: VecDeque<Value>,
     remote_server_events: VecDeque<Value>,
@@ -56,14 +60,14 @@ impl Runtime {
             Arc::new(crate::engine_services::local_text::LocalTextBackend::default())
                 as Arc<dyn TextServiceBackend>,
         );
-        Self::initialize(snapshot, memory, backend, world)
+        Self::with_services(snapshot, memory, backend, animation_assets::default_backend(), world)
     }
     pub fn with_text_backend(
         snapshot: Value,
         memory: u32,
         text_backend: Option<Arc<dyn TextServiceBackend>>,
     ) -> Result<Self, String> {
-        Self::initialize(snapshot, memory, text_backend, None)
+        Self::with_services(snapshot, memory, text_backend, animation_assets::default_backend(), None)
     }
     pub fn with_text_backend_and_shared_world(
         snapshot: Value,
@@ -71,12 +75,22 @@ impl Runtime {
         text_backend: Option<Arc<dyn TextServiceBackend>>,
         world: &SharedProjectedWorldView,
     ) -> Result<Self, String> {
-        Self::initialize(snapshot, memory, text_backend, Some(world))
+        Self::with_services(snapshot, memory, text_backend, animation_assets::default_backend(), Some(world))
     }
-    fn initialize(
+    pub fn with_animation_backend(
+        snapshot: Value,
+        memory: u32,
+        animation_backend: Arc<dyn AnimationBackend>,
+        world: Option<&SharedProjectedWorldView>,
+    ) -> Result<Self, String> {
+        let text = Some(Arc::new(crate::engine_services::local_text::LocalTextBackend::default()) as Arc<dyn TextServiceBackend>);
+        Self::with_services(snapshot, memory, text, animation_backend, world)
+    }
+    pub fn with_services(
         snapshot: Value,
         memory: u32,
         text_backend: Option<Arc<dyn TextServiceBackend>>,
+        animation_backend: Arc<dyn AnimationBackend>,
         world: Option<&SharedProjectedWorldView>,
     ) -> Result<Self, String> {
         if !(8..=512).contains(&memory) {
@@ -96,6 +110,8 @@ impl Runtime {
             text_backend,
             text_measurements,
             text_service: None,
+            animation_backend,
+            animation_service: None,
             local_errors: VecDeque::new(),
             remote_client_replies: VecDeque::new(),
             remote_server_events: VecDeque::new(),
@@ -150,6 +166,15 @@ impl Runtime {
             operation.as_str(),
             "init" | "render" | "host_io" | "physics_feedback"
         ) {
+            if command.get("loaded_animation_responses").is_some() {
+                return Err("Animation loading responses are owned by this runtime".into());
+            }
+            if command.get("animation_responses").is_none() && command.pointer("/delta/animation_responses").is_none() {
+                if let Some(service) = &self.animation_service {
+                    let ready = service.drain();
+                    if !ready.is_empty() { command["loaded_animation_responses"] = Value::Array(ready); }
+                }
+            }
             if let Some(service) = &self.text_service {
                 let ready = service.drain();
                 if !ready.is_empty() {
@@ -367,6 +392,13 @@ impl Runtime {
     }
 
     fn observe_services(&mut self, response: &Value) -> Result<(), String> {
+        #[cfg(feature = "rust-host")]
+        {
+            if self.animation_service.is_none() && AnimationQueue::has_requests(response) {
+                self.animation_service = Some(AnimationQueue::new(self.animation_backend.clone())?);
+            }
+            if let Some(service) = &self.animation_service { service.observe(response)?; }
+        }
         if let Some(active) = response
             .get("active_text_service_requests")
             .and_then(Value::as_array)
@@ -461,7 +493,6 @@ impl Runtime {
         for field in [
             "animation_intents",
             "movement_intents",
-            "animation_requests",
         ] {
             if self.networked && field == "movement_intents" {
                 continue;
@@ -576,6 +607,7 @@ impl Runtime {
         if let Some(mut queue) = self.text_service.take() {
             queue.close();
         }
+        self.animation_service.take();
         self.local_errors.clear();
         self.render_cache = None;
         self.buffer = Vec::new();

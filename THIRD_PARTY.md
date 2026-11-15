@@ -17,3 +17,5 @@ the cargo and npm lockfiles pin the other dependencies. this folder doesn't chan
 the rust host uses rustcrypto's aes, block modes, aes-gcm, and hash implementations on every platform. their cargo packages retain their mit/apache-2.0 licences; no separately installed openssl provider is used for these luau helpers.
 
 portable font measurement uses harfrust (mit), unicode-bidi and unicode-script (mit/apache-2.0), unicode-linebreak (apache-2.0), and unicode-segmentation (mit/apache-2.0). versions are pinned in `rust-client/Cargo.lock`; the windows package includes the dependency notices.
+
+animation assets use rojo's rbx-dom libraries (mit), xml-rs and flate2 through cargo. their pinned packages and notices are included with the windows build. the animation test fixture is authored for this project.

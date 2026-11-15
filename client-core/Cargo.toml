@@ -16,7 +16,7 @@ transport-test = ["transport", "wtransport/self-signed"]
 [dependencies]
 serde = "=1.0.229"
 serde_json = { version = "=1.0.154", features = ["float_roundtrip"] }
-zstd = "=0.13.1"
+zstd = "=0.13.4"
 blake2 = "=0.10.6"
 libc = "=0.2.191"
 getrandom = "=0.3.4"

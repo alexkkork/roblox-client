@@ -6,6 +6,7 @@ rust-version = "1.88"
 publish = false
 
 [dependencies]
+animation-codec = { path = "../animation-codec" }
 mlua = { version = "=0.12.2", optional = true, features = ["luau", "serialize"] }
 mlua-sys = { version = "=0.13.0", optional = true, features = ["luau", "external"] }
 rove-runtime-sys = { path = "../rust-runtime-sys", optional = true }

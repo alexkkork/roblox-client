@@ -127,6 +127,21 @@ pub fn with_actor<R>(
     callback(&actor.lua, &actor.world, &actor.scheduler).map(Some)
 }
 
+/// Async asset replies belong to one VM incarnation, even if the Actor ID is reused.
+pub fn with_actor_generation<R>(
+    root_lua: &Lua,
+    actor_id: &str,
+    generation: u64,
+    callback: impl FnOnce(&Lua) -> Result<R>,
+) -> Result<Option<R>> {
+    let runtime = runtime_ref(root_lua)?;
+    let actor = runtime.borrow().actors.get(actor_id).cloned();
+    let Some(actor) = actor else { return Ok(None); };
+    let actor = actor.borrow();
+    if actor.generation != generation { return Ok(None); }
+    callback(&actor.lua).map(Some)
+}
+
 /// Visit the live Actor VMs in their stable runtime order without holding the
 /// runtime map borrow while the callback runs.
 pub fn for_each_actor(

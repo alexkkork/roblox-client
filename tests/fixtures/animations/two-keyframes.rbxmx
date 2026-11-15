@@ -1,0 +1,17 @@
+<roblox version="4">
+<Item class="KeyframeSequence" referent="sequence"><Properties><string name="Name">AssetSmoke</string><bool name="Loop">true</bool><token name="Priority">1</token></Properties>
+<Item class="Keyframe" referent="frame0"><Properties><string name="Name">Start</string><float name="Time">0</float></Properties>
+<Item class="Pose" referent="root0"><Properties><string name="Name">Root</string><CoordinateFrame name="CFrame"><X>0</X><Y>0</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><float name="Weight">1</float></Properties>
+<Item class="Pose" referent="arm0"><Properties><string name="Name">Arm</string><CoordinateFrame name="CFrame"><X>0</X><Y>0</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><float name="Weight">1</float><token name="EasingStyle">0</token><token name="EasingDirection">0</token></Properties>
+<Item class="Pose" referent="tip0"><Properties><string name="Name">Tip</string><CoordinateFrame name="CFrame"><X>0</X><Y>0</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><float name="Weight">1</float></Properties></Item>
+</Item></Item>
+<Item class="KeyframeMarker" referent="marker0"><Properties><string name="Name">Step</string><string name="Value">left</string></Properties></Item>
+</Item>
+<Item class="Keyframe" referent="frame2"><Properties><string name="Name">Finish</string><float name="Time">2</float></Properties>
+<Item class="Pose" referent="root2"><Properties><string name="Name">Root</string><CoordinateFrame name="CFrame"><X>0</X><Y>0</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><float name="Weight">1</float></Properties>
+<Item class="Pose" referent="arm2"><Properties><string name="Name">Arm</string><CoordinateFrame name="CFrame"><X>4</X><Y>0</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><float name="Weight">1</float><token name="EasingStyle">0</token><token name="EasingDirection">0</token></Properties>
+<Item class="Pose" referent="tip2"><Properties><string name="Name">Tip</string><CoordinateFrame name="CFrame"><X>2</X><Y>0</Y><Z>0</Z><R00>1</R00><R01>0</R01><R02>0</R02><R10>0</R10><R11>1</R11><R12>0</R12><R20>0</R20><R21>0</R21><R22>1</R22></CoordinateFrame><float name="Weight">1</float></Properties></Item>
+</Item></Item>
+<Item class="KeyframeMarker" referent="marker2"><Properties><string name="Name">Step</string><string name="Value">right</string></Properties></Item>
+</Item>
+</Item></roblox>

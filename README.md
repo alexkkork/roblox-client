@@ -17,7 +17,7 @@ that runs a tiny script against a local test world. for the browser preview:
 rust-client/target/release/rove serve --snapshot tests/fixtures/world_snapshot.json
 ```
 
-`client-core` holds the world and networking, `rust-client/src/rust_host` has the engine and host, `rust-runtime-sys` links the official vm, and `ui` has the preview. `animation-codec` is the separate animation helper.
+`client-core` holds the world and networking, `rust-client/src/rust_host` has the engine and host, `rust-runtime-sys` links the official vm, and `ui` has the preview. `animation-codec` decodes assets directly inside the rust client; [animation loading](docs/animation-loading.md) has a quick test.
 
 the old c++ host stays in `runtime` for comparison with `--no-default-features`. it is not compiled by the normal build. some legacy compatibility helpers are still unported; [the migration notes](docs/rust-host.md) list the gaps and the local engine smoke command.
 

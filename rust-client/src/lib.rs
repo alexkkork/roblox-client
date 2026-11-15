@@ -2,6 +2,7 @@
 extern crate self as headless_luau;
 pub mod account_auth;
 pub mod allocation;
+mod animation_queue;
 pub mod bytecode_format;
 pub mod capture_replay;
 mod codecs;
@@ -49,3 +50,4 @@ pub mod session_integrity;
 pub mod session_ui;
 mod test_limits;
 pub mod ui_server;
+pub mod animation_assets;
