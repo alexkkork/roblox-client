@@ -15,6 +15,8 @@ const MAX_CACHE_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) mod attachments;
 #[path = "bulk_move.rs"]
 pub(crate) mod bulk_move;
+#[path = "joint_poses.rs"]
+pub(crate) mod joint_poses;
 #[path = "model_scaling.rs"]
 pub(crate) mod scaling;
 

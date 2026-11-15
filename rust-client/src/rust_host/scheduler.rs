@@ -185,6 +185,7 @@ impl Default for TaskState {
 
 #[derive(Debug, Clone, Default)]
 pub struct StepReport {
+    pub execution_time: Duration,
     pub resumed: usize,
     pub completed: usize,
     pub preempted: usize,
@@ -779,6 +780,28 @@ pub fn step(lua: &Lua, scheduler: &SchedulerRef, now: Instant, budget: Duration)
     step_with_limits(lua, scheduler, now, budget)
 }
 
+/// Run newly fired frame callbacks without waking ordinary task.wait sleepers.
+/// The task registry stays intact, including limits, ownership and CPU budgets.
+pub(crate) fn step_phase(
+    lua: &Lua,
+    scheduler: &SchedulerRef,
+    budget: Duration,
+    fire: impl FnOnce() -> Result<()>,
+) -> Result<StepReport> {
+    let (mut ready, mut sleeping) = {
+        let mut state = scheduler.borrow_mut();
+        (std::mem::take(&mut state.ready), std::mem::take(&mut state.sleeping))
+    };
+    let result = fire().map(|()| step(lua, scheduler, Instant::now(), budget));
+    // Restore on enqueue errors too; unrelated jobs must never disappear.
+    let mut state = scheduler.borrow_mut();
+    ready.append(&mut state.ready);
+    sleeping.append(&mut state.sleeping);
+    state.ready = ready;
+    state.sleeping = sleeping;
+    result
+}
+
 pub fn step_with_limits(
     lua: &Lua,
     scheduler: &SchedulerRef,
@@ -915,6 +938,7 @@ pub fn step_with_limits(
             state.active_policy = previous_policy;
         }
         let elapsed = started.elapsed();
+        report.execution_time += elapsed;
         report.resumed += 1;
 
         let mut state = scheduler.borrow_mut();

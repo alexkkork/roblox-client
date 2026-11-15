@@ -98,6 +98,8 @@ pub(crate) fn apply_pose_command(
                     | "Axis"
                     | "SecondaryAxis"
                     | "Transform"
+                    | "C0"
+                    | "C1"
                     | "CoordinateFrame"
                     | "WorldPivot"
                     | "FieldOfView"
@@ -117,7 +119,9 @@ pub(crate) fn apply_pose_command(
                 "WorldPivot" | EXPLICIT_PIVOT => model,
                 "CFrame" => part || camera || attachment,
                 "Axis" | "SecondaryAxis" => attachment,
-                "Transform" => node.class_name == "Bone",
+                "Transform" => matches!(node.class_name.as_str(), "Bone" | "Motor6D"),
+                "C0" | "C1" => node.class_name != "WeldConstraint"
+                    && super::super::joint_graph::rigid_class(&node.class_name),
                 "CoordinateFrame"
                 | "FieldOfView"
                 | "DiagonalFieldOfView"
@@ -153,7 +157,7 @@ pub(crate) fn apply_pose_command(
                 }
             } else if matches!(
                 key.as_str(),
-                "CFrame" | "CoordinateFrame" | "WorldPivot" | "Transform"
+                "CFrame" | "CoordinateFrame" | "WorldPivot" | "Transform" | "C0" | "C1"
             ) {
                 let cf = value
                     .get("$cframe")
@@ -207,7 +211,7 @@ pub(crate) fn apply_pose_command(
             actor_writes.push(json!({"id":write.id,"fields":write.fields,"_base_local_revision":node.local_revision}));
         }
     }
-    if actor && !writes.is_empty() {
+    if actor && (!writes.is_empty() || command.is_some()) {
         rows.push(command.unwrap_or_else(
             || json!({"kind":"pose_batch","writes":actor_writes,"cframe_only":cframe_only}),
         ));

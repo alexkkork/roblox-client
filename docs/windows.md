@@ -93,6 +93,14 @@ the package includes an 18-check script:
 .\rove.exe run --snapshot tests/fixtures/world_snapshot.json --script examples/bulk-move-smoke.luau --json
 ```
 
+## joint offsets and motor poses
+
+`C0` and `C1` move the connected branch with its root fixed. `Motor6D.Transform` waits until after `PreSimulation`. received poses and Actor replay use the same Rust solver. details and current limits are in [joint-poses.md](joint-poses.md).
+
+```powershell
+.\rove.exe run --snapshot tests/fixtures/world_snapshot.json --script examples/joint-poses-smoke.luau --json
+```
+
 ## private files and console
 
 the console uses a random token and a loopback-only tcp port. its endpoint file is private and disappears when the process closes. account files and their directory must allow access only to your windows user, system, and administrators. create a dedicated directory before saving any credentials:

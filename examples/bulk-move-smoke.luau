@@ -11,8 +11,8 @@ local function part(parent,name,x)
 end
 local m=Instance.new("Model",workspace);m.Name="BulkRig"
 local a,b,c=part(m,"A",0),part(m,"B",4),part(m,"C",8)
-local ab=Instance.new("Weld",a);ab.Name="Joint";ab.Part0=a;ab.Part1=b
-local bc=Instance.new("Motor6D",b);bc.Part0=b;bc.Part1=c
+local ab=Instance.new("Weld",a);ab.Name="Joint";ab.Part0=a;ab.Part1=b;ab.C0=CFrame.new(4,0,0)
+local bc=Instance.new("Motor6D",b);bc.Part0=b;bc.Part1=c;bc.C0=CFrame.new(4,0,0)
 local at=Instance.new("Attachment",c);at.CFrame=CFrame.new(1,2,3)
 check(select('#',workspace:BulkMoveTo({},{}))==0,"empty batch")
 check(#a:GetConnectedParts()==1 and a:GetConnectedParts()[1]==b,"direct connection")
@@ -46,13 +46,14 @@ check(b.Position.X==50 and not ab.Active,"disabled joint splits rig")
 local aa=Instance.new("Attachment",a)
 local spring=Instance.new("SpringConstraint",m);spring.Attachment0=aa;spring.Attachment1=at
 check(spring.Active and #a:GetConnectedParts(true)==0 and table.find(a:GetJoints(),spring)~=nil,"flexible constraint lookup")
-ab.Enabled=true
+ab.Enabled=true;task.wait()
+local sourceFrame=a.CFrame
 local clone=m:Clone();clone.Name="Copy";clone.Parent=workspace
 check(clone.A.Joint.Part0==clone.A and clone.A.Joint.Part1==clone.B,"clone endpoints")
 local delta=CFrame.new(100,0,0)*clone.A.CFrame:Inverse()
 local wanted=delta*clone.C.CFrame
 workspace:BulkMoveTo({clone.A},{CFrame.new(100,0,0)})
-check(frame(clone.C.CFrame,wanted) and a.Position.X==5,"clone moves independently")
+check(frame(clone.C.CFrame,wanted) and frame(a.CFrame,sourceFrame),"clone moves independently")
 local wm=Instance.new("WorldModel");local wp=part(wm,"P",0)
 wm:BulkMoveTo({wp},{CFrame.new(1,2,3)})
 check(wp.Position==Vector3.new(1,2,3) and wp.AssemblyRootPart==wp,"WorldModel batch")

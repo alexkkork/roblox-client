@@ -779,6 +779,7 @@ impl World {
                         .ok_or("set references unknown node")?;
                     super::movement::clear_received_attachment_overrides(node, &fields, action_sequence)?;
                     super::movement::clear_received_part_overrides(node, &fields);
+                    super::movement::remember_received_motor(node, &fields, action_sequence);
                     for (key, value) in fields {
                         let alias = super::world_aliases::canonical_key(&node.class_name, &key);
                         if alias.is_some() {
@@ -1054,6 +1055,9 @@ pub(crate) fn node_property(node: &Node, key: &str) -> Option<Json> {
     if let Some(value) = node.local_overrides.get(key) {
         return Some(value.clone());
     }
+    if let Some(value) = super::movement::received_joint_property(node, key) {
+        return Some(value);
+    }
     match key {
         "Name" => return Some(json!(node.name)),
         "ClassName" => return Some(json!(node.class_name)),
@@ -1205,6 +1209,7 @@ pub fn apply_delta_with_lua(
             })
             .collect()
     };
+    let joint_registration = super::movement::before_received_joint_poses(lua, ctx, actions, starting_sequence)?;
     ctx.borrow_mut()
         .apply_delta(delta, shared)
         .map_err(mlua::Error::RuntimeError)?;
@@ -1429,6 +1434,7 @@ pub fn apply_delta_with_lua(
             _ => {}
         }
     }
+    super::movement::received_joint_poses(lua, ctx, actions, starting_sequence, &joint_registration)?;
     super::movement::received_part_alias_events(lua,ctx,&before,actions,starting_sequence)?;
     refresh_derived_properties(lua)
 }
@@ -2219,6 +2225,9 @@ pub fn get_property(ctx: &WorldRef, id: &str, key: &str) -> mlua::Result<Json> {
     if let Some(value) = node.local_overrides.get(key) {
         return Ok(value.clone());
     }
+    if let Some(value) = super::movement::received_joint_property(node, key) {
+        return Ok(value);
+    }
     if let Some(value) = super::movement::part_transform_alias(node, key) {
         return value;
     }
@@ -2301,6 +2310,9 @@ pub fn get_property(ctx: &WorldRef, id: &str, key: &str) -> mlua::Result<Json> {
 pub fn get_property_revision(ctx: &WorldRef, id: &str, key: &str) -> Option<u64> {
     let world = ctx.borrow();
     let node = world.nodes.get(id)?;
+    if let Some(revision) = super::movement::received_joint_revision(node, key) {
+        return Some(revision);
+    }
     if let Some(revision) = node.revisions.get(key).and_then(Json::as_u64) {
         return Some(revision);
     }
@@ -2341,6 +2353,10 @@ pub(crate) fn raw_property_origin(ctx: &WorldRef, id: &str, key: &str) -> mlua::
             .nodes
             .get(id)
             .ok_or_else(|| mlua::Error::RuntimeError("instance is not in this world".into()))?;
+        if !node.local_overrides.contains_key(key)
+            && super::movement::received_joint_property(node, key).is_some() {
+            return Ok("derived_received".into());
+        }
         (
             node.class_name.clone(),
             node.local_overrides.contains_key(key),
@@ -2440,6 +2456,7 @@ pub fn emit_property_changed(lua: &Lua, ctx: &WorldRef, id: &str, key: &str) -> 
 pub(crate) fn emit_property_changed_direct(
     lua: &Lua, ctx: &WorldRef, id: &str, key: &str,
 ) -> mlua::Result<()> {
+    super::movement::joint_pose_changed(lua, ctx, id, key)?;
     if super::movement::attachment_transform_property(ctx, id, key) || super::joint_graph::derived_property(ctx, id, key) {
         return Ok(());
     }
@@ -3512,6 +3529,7 @@ pub fn clone_instance(lua: &Lua, ctx: &WorldRef, root_id: &str) -> mlua::Result<
         world_pose_batch::preserve_pivot_mode(&original, &mut properties);
         super::movement::preserve_scale(ctx, source_id, &mut properties);
         super::movement::preserve_attachment_pose(&original, &mut properties);
+        super::movement::preserve_joint_pose(&original, &mut properties);
         properties.remove("Name");
         properties.remove("Parent");
         for value in properties.values_mut() {
@@ -3622,6 +3640,7 @@ pub fn destroy_instance(lua: &Lua, ctx: &WorldRef, root_id: &str) -> mlua::Resul
         mutation["_base_local_revisions"] = Json::Object(base_revisions);
     }
     emit(ctx, "mutations", mutation);
+    super::movement::joint_pose_changed(lua, ctx, root_id, "Parent")?;
     Ok(())
 }
 
@@ -4453,6 +4472,8 @@ fn is_signal_name(key: &str) -> bool {
             | "Stepped"
             | "RenderStepped"
             | "PreRender"
+            | "PreAnimation"
+            | "PreSimulation"
             | "PostSimulation"
             | "CharacterAdded"
             | "CharacterRemoving"

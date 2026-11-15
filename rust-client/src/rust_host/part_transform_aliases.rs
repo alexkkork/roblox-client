@@ -4,6 +4,7 @@ use super::*;
 
 fn raw(node: &world::Node, key: &str) -> Option<Json> {
     node.local_overrides.get(key).cloned().or_else(|| {
+        if let Some(value) = received_joint_property(node, key) { return Some(value); }
         if let Some(projected) = &node.projected {
             projected.property(key).ok().flatten()
         } else {
@@ -12,6 +13,7 @@ fn raw(node: &world::Node, key: &str) -> Option<Json> {
     })
 }
 fn revision(node: &world::Node, key: &str) -> u64 {
+    if let Some(value) = received_joint_revision(node, key) { return value; }
     node.revisions
         .get(key)
         .and_then(Json::as_u64)

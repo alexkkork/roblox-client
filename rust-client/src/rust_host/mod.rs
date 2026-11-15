@@ -13,6 +13,7 @@ pub mod closures;
 pub mod drawing;
 pub mod enums;
 pub mod errors;
+pub(crate) mod frame_phases;
 pub mod geometry;
 pub mod gui;
 pub mod host_io_bindings;

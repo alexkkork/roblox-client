@@ -345,6 +345,15 @@ pub fn merge_actor_journal(
                     report.conflicts.push("attachment_pose:stale_input".into());
                 }
             }
+            "joint_offset" | "joint_target" | "joint_flush" | "joint_rebase" => {
+                let cursor = mutation_rows(root_world);
+                if super::movement::replay_joint_pose(lua, root_world, actor_world, row)? {
+                    tag_new_root_mutations(root_world, cursor, actor_id)?;
+                    report.applied += 1;
+                } else {
+                    report.conflicts.push(format!("{kind}:stale_input"));
+                }
+            }
             "attribute" => {
                 let id = row
                     .get("id")

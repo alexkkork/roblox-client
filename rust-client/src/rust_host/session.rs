@@ -419,35 +419,9 @@ impl Vm {
             .map_err(|e| e.to_string())?;
         super::remotes::dispatch_client_invocations(&self.lua, &self.world)
             .map_err(|e| e.to_string())?;
-        playback::step(&self.lua, &self.world, elapsed).map_err(|e| e.to_string())?;
-        world::refresh_derived_properties(&self.lua).map_err(|e| e.to_string())?;
-        let run_service = self.world.borrow().services.get("RunService").cloned();
-        if let Some(id) = run_service {
-            for key in [
-                "PreSimulation",
-                "Stepped",
-                "PostSimulation",
-                "Heartbeat",
-                "PreRender",
-                "RenderStepped",
-            ] {
-                let args = if key == "Stepped" {
-                    MultiValue::from_vec(vec![
-                        Value::Number(self.started.elapsed().as_secs_f64()),
-                        Value::Number(elapsed),
-                    ])
-                } else {
-                    MultiValue::from_vec(vec![Value::Number(elapsed)])
-                };
-                signals::fire(&self.lua, &self.world, &id, key, args).map_err(|e| e.to_string())?;
-            }
-        }
-        let report = scheduler::step(
-            &self.lua,
-            &self.scheduler,
-            Instant::now(),
-            Duration::from_millis(budget),
-        );
+        let report = super::frame_phases::step(
+            &self.lua, &self.world, &self.scheduler, self.started, elapsed, Duration::from_millis(budget),
+        ).map_err(|e| e.to_string())?;
         let pool = self
             .lua
             .app_data_ref::<super::shared_tables::SharedTableRegistry>()

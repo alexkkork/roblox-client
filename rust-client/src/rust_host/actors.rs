@@ -696,28 +696,9 @@ impl ActorVm {
         let script_runtime = super::lifecycle::reconcile(&self.lua, &self.world)?;
         super::remotes::cleanup_destroyed_instances(&self.lua, &self.world)?;
         super::remotes::dispatch_client_invocations(&self.lua, &self.world)?;
-        super::playback::step(&self.lua, &self.world, elapsed)?;
-        if let Some(run_service) = self.world.borrow().services.get("RunService").cloned() {
-            for event in [
-                "PreSimulation",
-                "Stepped",
-                "PostSimulation",
-                "Heartbeat",
-                "PreRender",
-                "RenderStepped",
-            ] {
-                let args = if event == "Stepped" {
-                    MultiValue::from_vec(vec![
-                        Value::Number(self.started.elapsed().as_secs_f64()),
-                        Value::Number(elapsed),
-                    ])
-                } else {
-                    MultiValue::from_vec(vec![Value::Number(elapsed)])
-                };
-                signals::fire(&self.lua, &self.world, &run_service, event, args)?;
-            }
-        }
-        let report = scheduler::step(&self.lua, &self.scheduler, Instant::now(), budget);
+        let report = super::frame_phases::step(
+            &self.lua, &self.world, &self.scheduler, self.started, elapsed, budget,
+        )?;
         super::host_io_bindings::pump(&self.lua)?;
         super::services::tick(&self.lua, &self.world);
         self.task_errors.extend(report.errors);
@@ -1034,10 +1015,12 @@ pub fn step(
         runtime.queue.clone()
     };
     let actor_map = runtime.borrow().actors.clone();
-    {
-        let root = root_world.borrow();
+    if !actor_map.is_empty() {
+        let journal = root_world.borrow().effects.get("mutations")
+            .and_then(Json::as_array).cloned().unwrap_or_default();
         for actor in actor_map.values() {
-            actor.borrow().world.borrow_mut().sync_actor_fork(&root);
+            let actor=actor.borrow();
+            super::actor_shadow::sync_peer(&actor.lua,&actor.world,root_world,&journal)?;
         }
     }
     let mut incoming = std::mem::take(&mut queue.borrow_mut().messages);
@@ -1110,6 +1093,8 @@ pub fn step(
             .cloned()
             .unwrap_or_default();
         if !journal.is_empty() {
+            let root_cursor = root_world.borrow().effects.get("mutations")
+                .and_then(Json::as_array).map_or(0, Vec::len);
             match super::actor_shadow::merge_actor_journal(
                 root_lua,
                 root_world,
@@ -1122,6 +1107,10 @@ pub fn step(
                         "applied":report.applied,
                         "conflicts":report.conflicts
                     });
+                    let committed = if vm_order.len() > 1 {
+                        root_world.borrow().effects.get("mutations")
+                            .and_then(Json::as_array).map(|rows|rows[root_cursor..].to_vec()).unwrap_or_default()
+                    } else { Vec::new() };
                     for peer_id in &vm_order {
                         if peer_id == actor_id {
                             continue;
@@ -1132,7 +1121,7 @@ pub fn step(
                             &peer.lua,
                             &peer.world,
                             root_world,
-                            &journal,
+                            &committed,
                         )?;
                     }
                 }

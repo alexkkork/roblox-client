@@ -11,6 +11,8 @@ use std::{
 mod attachment_tests;
 #[path = "bulk_move_actor_tests.rs"]
 mod bulk_move_tests;
+#[path = "joint_pose_actor_tests.rs"]
+mod joint_pose_tests;
 #[path = "model_scaling_actor_tests.rs"]
 mod model_scaling_tests;
 

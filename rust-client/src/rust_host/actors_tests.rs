@@ -1,4 +1,6 @@
 use super::*;
+#[path = "joint_pose_runtime_tests.rs"]
+mod joint_pose_tests;
 
 fn setup() -> (Lua, WorldRef, SharedTableRegistry) {
     let snapshot = json!({

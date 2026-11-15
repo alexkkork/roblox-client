@@ -28,10 +28,10 @@ parts; the runtime's existing journal, response and scheduler limits still apply
 
 ## current boundaries
 
-This is local engine behavior, not proof of server-authoritative movement. It
-does not simulate constraint forces, snap newly connected C0/C1 frames or solve
-Motor6D animation. Position and angle setters still use their existing isolated
-part path; joint-offset rebasing is separate work.
+This is local engine behavior, not proof of server-authoritative movement.
+[Joint poses](joint-poses.md) now handle C0/C1 edits, joint activation, deferred
+Motor6D targets and Position/angle offset rebasing. Dynamic constraint forces
+and animation sampling remain separate work.
 
 Conflicting targets in one rigid component use the last requested endpoint.
 Duplicate/cyclic joints, anchored-island selection and equal root priorities use

@@ -20,6 +20,13 @@ mod pivots;
 mod part_aliases;
 pub(crate) use part_aliases::{alias as part_transform_alias, clear_overrides as clear_received_part_overrides, received_events as received_part_alias_events};
 pub(crate) use pivots::bulk_move::replay as replay_bulk_move;
+pub(crate) use pivots::joint_poses::{
+    changed as joint_pose_changed, flush as flush_joint_poses, replay as replay_joint_pose,
+    preserve_received as preserve_joint_pose, received as received_joint_poses,
+    received_property as received_joint_property, received_revision as received_joint_revision,
+    remember_received_motor,
+    before_received as before_received_joint_poses,
+};
 pub(crate) use pivots::attachments::{
     attachment_frame, attachment_origin, clear_received_attachment_overrides,
     preserve_attachment_pose, refresh as refresh_attachments, replay_attachment_pose,
@@ -351,6 +358,9 @@ fn set_part_transform(
         _ => unreachable!(),
     }
     if key == "CFrame" && pivots::bulk_move::move_rigid_frame(lua, ctx, id, &frame)? {
+        return Ok(true);
+    }
+    if key != "CFrame" && pivots::joint_poses::rebase(lua, ctx, id, &frame)? {
         return Ok(true);
     }
     store_frame(lua, ctx, id, frame)?;
@@ -810,6 +820,7 @@ pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
     );
     world::register_method(ctx, "Player", "Move", humanoid_move);
     pivots::install(ctx);
+    pivots::joint_poses::install(lua, ctx)?;
     world::register_setter(ctx, "Anchored", set_anchored);
     world::register_setter(ctx, "CFrame", set_cframe);
     world::register_setter(ctx, "Position", set_position);
