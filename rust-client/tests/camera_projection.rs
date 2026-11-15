@@ -239,6 +239,46 @@ fn view_stretch_changes_horizontal_projection_and_ray_inversely() {
 }
 
 #[test]
+fn max_axis_stretch_preserves_the_longest_axis_in_landscape_and_portrait() {
+    let mut r = setup();
+    execute(
+        &mut r,
+        r#"
+        c.FieldOfViewMode=Enum.FieldOfViewMode.MaxAxis;c.ViewStretch=2
+        local p=c:WorldToViewportPoint(Vector3.new(1,1,-10));near(p.X,430);near(p.Y,240)
+        local ray=c:ViewportPointToRay(p.X,p.Y)
+        near(ray.Direction.X/-ray.Direction.Z,.1);near(ray.Direction.Y/-ray.Direction.Z,.1)
+    "#,
+    );
+    resize(&mut r, 2, json!({"size":[600,800]}));
+    execute(
+        &mut r,
+        r#"
+        local focal=800/(2*math.tan(math.rad(c.FieldOfView/2)))
+        local p=c:WorldToViewportPoint(Vector3.new(1,1,-10))
+        near(p.X,300+focal*.2);near(p.Y,400-focal*.1)
+        local ray=c:ViewportPointToRay(p.X,p.Y)
+        near(ray.Direction.X/-ray.Direction.Z,.1);near(ray.Direction.Y/-ray.Direction.Z,.1)
+    "#,
+    );
+}
+
+#[test]
+fn unverified_diagonal_stretch_fails_instead_of_using_the_wrong_axis() {
+    let mut r = setup();
+    execute(
+        &mut r,
+        r#"
+        c.FieldOfViewMode=Enum.FieldOfViewMode.Diagonal;c.ViewStretch=2
+        local ok,err=pcall(function() c:WorldToViewportPoint(Vector3.new(0,0,-5)) end)
+        assert(not ok and string.find(err,'not implemented',1,true))
+        assert(not pcall(function() c:ViewportPointToRay(400,300) end))
+        c.ViewStretch=1;local p,on=c:WorldToViewportPoint(Vector3.new(0,0,-5));assert(on)
+    "#,
+    );
+}
+
+#[test]
 fn invalid_display_delta_rolls_back_its_world_actions() {
     let mut r = setup();
     execute(

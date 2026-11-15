@@ -55,6 +55,9 @@ for the operations that use them. Missing received values stay unavailable.
 This implements perspective geometry, not rendering, VR transforms, automatic
 camera lifecycle, occlusion queries, or the orthographic camera beta. An
 explicit orthographic projection returns an error.
+Non-unit ViewStretch is supported for Vertical and MaxAxis modes, preserving
+the pinned axis. Its combination with Diagonal mode remains an explicit
+unsupported operation pending native differential verification.
 
 ```sh
 cargo test --locked --manifest-path rust-client/Cargo.toml --test camera_projection

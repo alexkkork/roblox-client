@@ -504,7 +504,17 @@ fn lens(ctx: &WorldRef, id: &str, vp: Surface) -> mlua::Result<[f64; 2]> {
     if stretch <= 0. {
         return Err(error("camera ViewStretch must be positive"));
     }
-    Ok([f * stretch, f])
+    if stretch == 1. {
+        return Ok([f, f]);
+    }
+    match mode(ctx, id)? {
+        0 => Ok([f * stretch, f]),
+        2 if vp.size[0] > vp.size[1] => Ok([f, f * stretch]),
+        2 => Ok([f * stretch, f]),
+        _ => Err(error(
+            "non-unit ViewStretch with Diagonal FieldOfViewMode is not implemented",
+        )),
+    }
 }
 fn project(
     lua: &Lua,
