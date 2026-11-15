@@ -3,6 +3,8 @@ use super::*;
 use crate::rust_host::joint_graph::{Graph, Scope};
 use sha2::Digest;
 
+#[path = "joint_animation.rs"]
+mod animation;
 #[path = "joint_pose_received.rs"]
 mod received;
 #[path = "joint_pose_replay.rs"]
@@ -11,6 +13,7 @@ mod replay;
 mod solver;
 #[path = "joint_pose_state.rs"]
 mod state;
+pub(crate) use animation::apply as animate;
 pub(crate) use received::{before_received, received};
 pub(crate) use replay::replay;
 use solver::{Edits, Prepared, Transforms};

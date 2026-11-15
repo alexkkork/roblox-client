@@ -31,9 +31,10 @@ Actor's speculative poses. Other Actor VMs receive resulting property events.
 ## limits
 
 This adds local kinematics for Weld, Snap, ManualWeld, Motor and Motor6D. A legacy
-Motor with an unknown or nonzero CurrentAngle remains unsupported. Animation
-sampling, AnimationConstraint rigs, dynamic constraint forces and server movement
-acceptance are separate work. The graph's deterministic cycle and root-tie rules
+Motor with an unknown or nonzero CurrentAngle remains unsupported. KeyframeSequence
+sampling is covered in [animation-poses.md](animation-poses.md). AnimationConstraint
+rigs, dynamic constraint forces and server movement acceptance remain unfinished.
+The graph's deterministic cycle and root-tie rules
 have not been compared with native Studio.
 
 A batch is limited to 4,096 joints and 4,096 connected parts. Existing mutation,

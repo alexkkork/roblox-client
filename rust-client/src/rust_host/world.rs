@@ -3109,6 +3109,8 @@ fn local_service_supported(class: &str) -> bool {
             | "Debris"
             | "CollectionService"
             | "TweenService"
+            | "AnimationClipProvider"
+            | "KeyframeSequenceProvider"
             | "TestService"
             | "Stats"
     )

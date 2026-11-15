@@ -162,7 +162,7 @@ fn euler(x: f64, y: f64, z: f64, yxz: bool) -> mlua::Result<CFrameValue> {
         ),
     ))
 }
-fn quat_unit(mut q: [f64; 4]) -> mlua::Result<[f64; 4]> {
+pub(crate) fn quat_unit(mut q: [f64; 4]) -> mlua::Result<[f64; 4]> {
     if !q.iter().all(|v| v.is_finite()) {
         return Err(err("CFrame quaternion must be finite"));
     }
@@ -181,7 +181,7 @@ fn quat_unit(mut q: [f64; 4]) -> mlua::Result<[f64; 4]> {
     }
     Ok(q)
 }
-fn quat_matrix(q: [f64; 4]) -> [f64; 9] {
+pub(crate) fn quat_matrix(q: [f64; 4]) -> [f64; 9] {
     let [x, y, z, w] = q;
     [
         1. - 2. * (y * y + z * z),
@@ -195,7 +195,7 @@ fn quat_matrix(q: [f64; 4]) -> [f64; 9] {
         1. - 2. * (x * x + y * y),
     ]
 }
-fn matrix_quat(r: [f64; 9]) -> mlua::Result<[f64; 4]> {
+pub(crate) fn matrix_quat(r: [f64; 9]) -> mlua::Result<[f64; 4]> {
     if !r.iter().all(|v| v.is_finite()) {
         return Err(err("CFrame rotation must be finite"));
     }
@@ -235,7 +235,7 @@ fn matrix_quat(r: [f64; 9]) -> mlua::Result<[f64; 4]> {
     };
     quat_unit(q)
 }
-fn slerp(a: [f64; 9], b: [f64; 9], alpha: f64) -> mlua::Result<[f64; 9]> {
+pub(crate) fn slerp(a: [f64; 9], b: [f64; 9], alpha: f64) -> mlua::Result<[f64; 9]> {
     if alpha == 0. {
         return Ok(a);
     }

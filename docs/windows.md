@@ -101,6 +101,13 @@ the package includes an 18-check script:
 .\rove.exe run --snapshot tests/fixtures/world_snapshot.json --script examples/joint-poses-smoke.luau --json
 ```
 
+animation tracks now move Motor6Ds and Bones, with local sequence registration,
+blending and fades. the [animation guide](animation-poses.md) covers the limits.
+
+```powershell
+.\rove.exe run --snapshot tests/fixtures/world_snapshot.json --script examples/animation-poses-smoke.luau --json
+```
+
 ## private files and console
 
 the console uses a random token and a loopback-only tcp port. its endpoint file is private and disappears when the process closes. account files and their directory must allow access only to your windows user, system, and administrators. create a dedicated directory before saving any credentials:

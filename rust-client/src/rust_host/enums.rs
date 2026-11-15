@@ -129,6 +129,8 @@ ResamplerMode|Default=0,Pixelated=1
 CompressionAlgorithm|Zstd=0
 HashAlgorithm|Blake2b=0,Blake3=1,Md5=2,Sha1=3,Sha256=4
 AnimationPriority|Idle=0,Movement=1,Action=2,Action2=3,Action3=4,Action4=5,Core=1000
+PoseEasingStyle|Linear=0,Constant=1,Elastic=2,Cubic=3,Bounce=4,CubicV2=5
+PoseEasingDirection|In=0,Out=1,InOut=2
 TextChatMessageStatus|Unknown=1,Success=2,Sending=3,TextFilterFailed=4,Floodchecked=5,InvalidPrivacySettings=6,InvalidTextChannelPermissions=7,MessageTooLong=8,ModerationTimeout=9
 InitialDockState|Top=0,Bottom=1,Left=2,Right=3,Float=4
 "#;

@@ -21,6 +21,7 @@ mod part_aliases;
 pub(crate) use part_aliases::{alias as part_transform_alias, clear_overrides as clear_received_part_overrides, received_events as received_part_alias_events};
 pub(crate) use pivots::bulk_move::replay as replay_bulk_move;
 pub(crate) use pivots::joint_poses::{
+    animate as apply_animation_poses,
     changed as joint_pose_changed, flush as flush_joint_poses, replay as replay_joint_pose,
     preserve_received as preserve_joint_pose, received as received_joint_poses,
     received_property as received_joint_property, received_revision as received_joint_revision,

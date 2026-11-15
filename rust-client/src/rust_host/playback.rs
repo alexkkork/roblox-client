@@ -29,6 +29,13 @@ use super::{
 const TWEEN_LIMIT: usize = 256;
 const TWEEN_GOAL_LIMIT: usize = 32;
 
+#[path = "animation_clip.rs"]
+mod animation_clip;
+#[path = "animation_poses.rs"]
+mod animation_poses;
+#[path = "animation_registration.rs"]
+mod animation_registration;
+
 #[derive(Clone, Debug)]
 struct TweenInfo {
     time: f64,
@@ -201,7 +208,8 @@ struct Store {
     tracks: Vec<Rc<RefCell<TrackState>>>,
     animation_requested: HashSet<String>,
     animation_errors: HashSet<String>,
-    animation_clips: HashMap<String, Json>,
+    animation_clips: HashMap<String, Rc<animation_clip::Clip>>,
+    animation_poses: animation_poses::State,
     animation_clip_bytes: usize,
     next_animation_intent: u64,
     next_tween_id: u64,
@@ -1991,7 +1999,10 @@ pub fn complete_animation_requests(lua: &Lua, responses: &Json) -> mlua::Result<
             if total > 16 * 1024 * 1024 - store.animation_clip_bytes {
                 return Err(err("animation timeline cache limit exceeded"));
             }
-            validated.push((reference, Some(clip.clone())));
+            validated.push((
+                reference,
+                Some(Rc::new(animation_clip::Clip::compile(clip)?)),
+            ));
         }
     }
     let ctx = lua.app_data_ref::<Store>().and_then(|store| {
@@ -2003,9 +2014,6 @@ pub fn complete_animation_requests(lua: &Lua, responses: &Json) -> mlua::Result<
     let mut store = ensure_store(lua);
     for (reference, clip) in validated {
         if let Some(clip) = clip {
-            store.animation_clip_bytes += serde_json::to_vec(&clip)
-                .map_err(|_| err("animation clip serialization failed"))?
-                .len();
             for track in &store.tracks {
                 let mut t = track.borrow_mut();
                 if t.reference == reference {
@@ -2040,6 +2048,8 @@ pub fn complete_animation_requests(lua: &Lua, responses: &Json) -> mlua::Result<
             }
         }
     }
+    // Charge the original bytes, including poses now stored as compact channels.
+    store.animation_clip_bytes += total;
     Ok(())
 }
 
@@ -2104,6 +2114,7 @@ pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
         world::register_method(ctx, class, "GetTrackByAnimationId", animator_find_track);
     }
     world::register_getter(ctx, "AnimationPlayed", animation_played_getter);
+    animation_registration::install(ctx);
     ensure_store(lua);
     Ok(())
 }
@@ -2361,6 +2372,8 @@ pub fn step(lua: &Lua, ctx: &WorldRef, elapsed: f64) -> mlua::Result<()> {
     // keyframe/marker timelines and audio advances only when duration is known.
     store.sounds.retain(|s| !s.id.is_empty());
     store.tracks.retain(|t| !t.borrow().id.is_empty());
+    drop(store);
+    animation_poses::step(lua, ctx)?;
     Ok(())
 }
 

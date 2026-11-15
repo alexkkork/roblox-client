@@ -39,6 +39,7 @@ pub(crate) fn replay(
         let graph = Graph::build(ctx, Scope::Rigid)?;
         let id = row["id"].as_str().unwrap_or("");
         let (ids, members, poses) = match kind {
+            "joint_animation" => (strings(row, "joints")?, strings(row, "guards")?, false),
             "joint_target" => (vec![id.to_owned()], vec![], false),
             "joint_flush" => (strings(row, "joints")?, vec![], false),
             "joint_rebase" => (strings(row, "joints")?, strings(row, "members")?, true),
@@ -61,6 +62,23 @@ pub(crate) fn replay(
             return Ok(false);
         }
         match kind {
+            "joint_animation" => {
+                let rows = row["targets"]
+                    .as_array()
+                    .filter(|v| v.len() == ids.len())
+                    .ok_or_else(|| err("invalid animation target batch"))?;
+                let targets = rows
+                    .iter()
+                    .zip(&ids)
+                    .map(|(v, id)| {
+                        if v["id"].as_str() != Some(id) {
+                            return Err(err("animation target order mismatch"));
+                        }
+                        Ok((id.clone(), Frame::decode(&v["frame"])?.value()))
+                    })
+                    .collect::<mlua::Result<Vec<_>>>()?;
+                animate(lua, ctx, &targets, &members)?;
+            }
             "joint_offset" => offset(
                 lua,
                 ctx,
