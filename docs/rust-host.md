@@ -125,3 +125,5 @@ On macOS, `--features 'rust-host allocator-mimalloc' --test allocator_ownership`
 checks the active VM allocator, its reallocation path, and a real Luau userdata
 allocation. The old C++ malloc/new probe only applies to the legacy backend.
 This check verifies allocator ownership; it does not measure peak process RAM.
+
+Attachment and Bone coordinate bindings, received updates and Actor replay are now in Rust. See [attachment transforms](attachment-transforms.md) for the supported properties and limits.

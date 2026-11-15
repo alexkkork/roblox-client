@@ -11,6 +11,8 @@ const MARKER: &str = "__RoveWorldPivotSet";
 const MAX_NODES: usize = 100_000;
 const MAX_CACHE_BYTES: usize = 4 * 1024 * 1024;
 
+#[path = "attachment_transforms.rs"]
+pub(crate) mod attachments;
 #[path = "model_scaling.rs"]
 pub(crate) mod scaling;
 
@@ -626,6 +628,7 @@ fn set_offset(lua: &Lua, ctx: &WorldRef, id: &str, value: Value) -> mlua::Result
 }
 pub(super) fn install(ctx: &WorldRef) {
     scaling::install(ctx);
+    attachments::install(ctx);
     world::register_method(ctx, "PVInstance", "GetPivot", get_pivot);
     world::register_method(ctx, "PVInstance", "PivotTo", pivot_to);
     world::register_method(ctx, "Model", "GetBoundingBox", |lua, ctx, id, args| {

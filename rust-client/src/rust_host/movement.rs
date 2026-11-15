@@ -16,6 +16,11 @@ use std::cell::Cell;
 
 #[path = "model_pivots.rs"]
 mod pivots;
+pub(crate) use pivots::attachments::{
+    attachment_frame, attachment_origin, clear_received_attachment_overrides,
+    preserve_attachment_pose, refresh as refresh_attachments, replay_attachment_pose,
+    transform_property as attachment_transform_property, watch_signal as watch_attachment_signal,
+};
 pub(crate) use pivots::scaling::{
     clone_scale_state, export_scale_baseline, import_scale_baseline, preserve_scale, replay_scale,
     ScaleState,

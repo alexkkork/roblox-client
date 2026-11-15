@@ -24,7 +24,7 @@ use std::{
 mod world_queries;
 #[path = "world_pose_batch.rs"]
 mod world_pose_batch;
-pub(crate) use world_pose_batch::{apply_pose_batch, pose_events, PoseWrite};
+pub(crate) use world_pose_batch::{apply_pose_batch, apply_pose_command, pose_events, PoseWrite};
 #[path = "world_model_scale.rs"]
 mod world_model_scale;
 pub(crate) use world_model_scale::apply_scale_batch;
@@ -777,6 +777,7 @@ impl World {
                         .nodes
                         .get_mut(&id)
                         .ok_or("set references unknown node")?;
+                    super::movement::clear_received_attachment_overrides(node, &fields, action_sequence)?;
                     for (key, value) in fields {
                         let alias = super::world_aliases::canonical_key(&node.class_name, &key);
                         if alias.is_some() {
@@ -1048,7 +1049,7 @@ fn validate_tags(values: &[Json], known: bool) -> Result<Vec<String>, String> {
     Ok(tags)
 }
 
-fn node_property(node: &Node, key: &str) -> Option<Json> {
+pub(crate) fn node_property(node: &Node, key: &str) -> Option<Json> {
     if let Some(value) = node.local_overrides.get(key) {
         return Some(value.clone());
     }
@@ -1235,7 +1236,7 @@ pub fn apply_delta_with_lua(
     };
     if player != previous_player {
         if let Some(id) = players_service {
-            emit_property_changed(lua, ctx, &id, "LocalPlayer")?;
+            emit_property_changed_direct(lua, ctx, &id, "LocalPlayer")?;
         }
     }
     if loaded && !previously_loaded {
@@ -1283,7 +1284,7 @@ pub fn apply_delta_with_lua(
                             .get(id)
                             .and_then(|n| node_property(n, key));
                         if old != new {
-                            emit_property_changed(lua, ctx, id, key)?;
+                            emit_property_changed_direct(lua, ctx, id, key)?;
                             if key == "Parent" {
                                 let parent =
                                     ctx.borrow().nodes.get(id).and_then(|n| n.parent.clone());
@@ -1315,7 +1316,7 @@ pub fn apply_delta_with_lua(
                         .get(id)
                         .and_then(|n| node_property(n, key));
                     if old != new {
-                        emit_property_changed(lua, ctx, id, key)?;
+                        emit_property_changed_direct(lua, ctx, id, key)?;
                         if key == "Parent" {
                             hierarchy_changed(
                                 lua,
@@ -1427,7 +1428,7 @@ pub fn apply_delta_with_lua(
             _ => {}
         }
     }
-    Ok(())
+    super::movement::refresh_attachments(lua)
 }
 
 /// Refresh an Actor fork from the root after another VM committed local state,
@@ -1537,7 +1538,7 @@ pub fn sync_actor_fork_with_lua(
                     continue;
                 }
                 if old_value != new_value {
-                    emit_property_changed(lua, actor_world, id, key)?;
+                    emit_property_changed_direct(lua, actor_world, id, key)?;
                     if key == "Parent" {
                         hierarchy_changed(
                             lua,
@@ -1591,7 +1592,7 @@ pub fn sync_actor_fork_with_lua(
             _ => {}
         }
     }
-    Ok(())
+    super::movement::refresh_attachments(lua)
 }
 
 fn fire_attribute_changed(lua: &Lua, ctx: &WorldRef, id: &str, name: &str) -> mlua::Result<()> {
@@ -2210,6 +2211,9 @@ pub fn get_property(ctx: &WorldRef, id: &str, key: &str) -> mlua::Result<Json> {
         .nodes
         .get(id)
         .ok_or_else(|| mlua::Error::RuntimeError("instance is not in this world".into()))?;
+    if key == "CFrame" && class_chain(&node.class_name).iter().any(|c| c == "Attachment") {
+        return super::movement::attachment_frame(node);
+    }
     if let Some(value) = node.local_overrides.get(key) {
         return Ok(value.clone());
     }
@@ -2315,6 +2319,13 @@ pub fn get_property_revision(ctx: &WorldRef, id: &str, key: &str) -> Option<u64>
 }
 
 fn property_origin(ctx: &WorldRef, id: &str, key: &str) -> mlua::Result<String> {
+    if let Some(origin) = super::movement::attachment_origin(ctx, id, key) {
+        return Ok(origin);
+    }
+    raw_property_origin(ctx, id, key)
+}
+
+pub(crate) fn raw_property_origin(ctx: &WorldRef, id: &str, key: &str) -> mlua::Result<String> {
     let (class, local, parent, projected, known_parent) = {
         let world = ctx.borrow();
         let node = world
@@ -2414,6 +2425,15 @@ pub fn set_engine_property(
 }
 
 pub fn emit_property_changed(lua: &Lua, ctx: &WorldRef, id: &str, key: &str) -> mlua::Result<()> {
+    emit_property_changed_direct(lua, ctx, id, key)?;
+    super::movement::refresh_attachments(lua)
+}
+pub(crate) fn emit_property_changed_direct(
+    lua: &Lua, ctx: &WorldRef, id: &str, key: &str,
+) -> mlua::Result<()> {
+    if super::movement::attachment_transform_property(ctx, id, key) {
+        return Ok(());
+    }
     let mut args = MultiValue::new();
     args.push_back(Value::String(lua.create_string(key)?));
     super::signals::fire(lua, ctx, id, "Changed", args)?;
@@ -3463,6 +3483,7 @@ pub fn clone_instance(lua: &Lua, ctx: &WorldRef, root_id: &str) -> mlua::Result<
         );
         world_pose_batch::preserve_pivot_mode(&original, &mut properties);
         super::movement::preserve_scale(ctx, source_id, &mut properties);
+        super::movement::preserve_attachment_pose(&original, &mut properties);
         properties.remove("Name");
         properties.remove("Parent");
         for value in properties.values_mut() {

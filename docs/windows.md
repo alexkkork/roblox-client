@@ -75,6 +75,16 @@ the package includes a 15-check script:
 .\rove.exe run --snapshot tests/fixtures/world_snapshot.json --script examples/model-scaling-smoke.luau --json
 ```
 
+## attachments and bones
+
+local and world attachment coordinates, axis setters, bone poses, and constraint lookup run in rust. ancestor movement and received updates also refresh property signals. this adds rig math; animation playback and constraint simulation are separate features.
+
+the package includes an 18-check script:
+
+```powershell
+.\rove.exe run --snapshot tests/fixtures/world_snapshot.json --script examples/attachment-transforms-smoke.luau --json
+```
+
 ## private files and console
 
 the console uses a random token and a loopback-only tcp port. its endpoint file is private and disappears when the process closes. account files and their directory must allow access only to your windows user, system, and administrators. create a dedicated directory before saving any credentials:

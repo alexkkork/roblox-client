@@ -52,6 +52,15 @@ pub(crate) fn apply_pose_batch(
     writes: &[PoseWrite],
     cframe_only: bool,
 ) -> mlua::Result<Vec<(String, String)>> {
+    apply_pose_command(ctx, writes, cframe_only, None)
+}
+
+pub(crate) fn apply_pose_command(
+    ctx: &WorldRef,
+    writes: &[PoseWrite],
+    cframe_only: bool,
+    command: Option<Json>,
+) -> mlua::Result<Vec<(String, String)>> {
     let error = |s: &str| mlua::Error::RuntimeError(s.into());
     let mut world = ctx.borrow_mut();
     let actor = world.local_namespace.starts_with("local:actor:");
@@ -86,6 +95,9 @@ pub(crate) fn apply_pose_batch(
                     | "Position"
                     | "Orientation"
                     | "Rotation"
+                    | "Axis"
+                    | "SecondaryAxis"
+                    | "Transform"
                     | "CoordinateFrame"
                     | "WorldPivot"
                     | "FieldOfView"
@@ -100,15 +112,18 @@ pub(crate) fn apply_pose_batch(
             let model = chain.iter().any(|c| c == "Model");
             let part = chain.iter().any(|c| c == "BasePart");
             let camera = chain.iter().any(|c| c == "Camera");
+            let attachment = chain.iter().any(|c| c == "Attachment");
             let allowed = match key.as_str() {
                 "WorldPivot" | EXPLICIT_PIVOT => model,
-                "CFrame" => part || camera,
+                "CFrame" => part || camera || attachment,
+                "Axis" | "SecondaryAxis" => attachment,
+                "Transform" => node.class_name == "Bone",
                 "CoordinateFrame"
                 | "FieldOfView"
                 | "DiagonalFieldOfView"
                 | "MaxAxisFieldOfView"
                 | "FieldOfViewMode" => camera,
-                _ => part,
+                _ => part || attachment,
             };
             if !allowed {
                 return Err(error("pose field does not match its target class"));
@@ -136,11 +151,21 @@ pub(crate) fn apply_pose_batch(
                 {
                     return Err(error("invalid camera field of view"));
                 }
-            } else if matches!(key.as_str(), "CFrame" | "CoordinateFrame" | "WorldPivot") {
+            } else if matches!(
+                key.as_str(),
+                "CFrame" | "CoordinateFrame" | "WorldPivot" | "Transform"
+            ) {
                 let cf = value
                     .get("$cframe")
                     .ok_or_else(|| error("pose field requires a CFrame"))?;
                 for (name, count) in [("position", 3), ("rotation", 9)] {
+                    if attachment
+                        && key == "CFrame"
+                        && name == "rotation"
+                        && cf.get("rotation").is_none()
+                    {
+                        continue;
+                    }
                     if cf.get(name).and_then(Json::as_array).is_none_or(|v| {
                         v.len() != count
                             || v.iter().any(|n| {
@@ -183,7 +208,9 @@ pub(crate) fn apply_pose_batch(
         }
     }
     if actor && !actor_writes.is_empty() {
-        rows.push(json!({"kind":"pose_batch","writes":actor_writes,"cframe_only":cframe_only}));
+        rows.push(command.unwrap_or_else(
+            || json!({"kind":"pose_batch","writes":actor_writes,"cframe_only":cframe_only}),
+        ));
     }
     let existing = match world.effects.get("mutations") {
         None => None,
@@ -234,9 +261,9 @@ pub(crate) fn pose_events(
     changes: Vec<(String, String)>,
 ) -> mlua::Result<()> {
     for (id, key) in changes {
-        emit_property_changed(lua, ctx, &id, &key)?;
+        emit_property_changed_direct(lua, ctx, &id, &key)?;
     }
-    Ok(())
+    super::super::movement::refresh_attachments(lua)
 }
 
 #[cfg(test)]

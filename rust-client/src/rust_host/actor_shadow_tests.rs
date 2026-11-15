@@ -7,6 +7,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "attachment_actor_tests.rs"]
+mod attachment_tests;
 #[path = "model_scaling_actor_tests.rs"]
 mod model_scaling_tests;
 

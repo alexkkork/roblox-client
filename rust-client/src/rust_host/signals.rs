@@ -94,6 +94,14 @@ fn app_hub(lua: &Lua) -> Result<SignalHubRef> {
         .ok_or_else(|| mlua::Error::RuntimeError("local signal hub is not installed".into()))
 }
 
+pub(crate) fn has_listeners(lua: &Lua, ctx: &WorldRef, id: &str, key: &str) -> Result<bool> {
+    let hub = app_hub(lua)?;
+    let hub = hub.borrow();
+    Ok(hub.signals.get(&(world_key(ctx), id.into(), key.into())).is_some_and(|records| {
+        records.iter().any(|r| r.connected && (r.callback.is_some() || r.waiter.is_some()))
+    }))
+}
+
 /// Counts registered local listeners and parked signal waiters. Fired
 /// callbacks are scheduler queue entries, not pending signal events.
 pub fn diagnostics(lua: &Lua) -> Result<SignalDiagnostics> {
@@ -154,6 +162,7 @@ pub fn connect_owned(
     owner: impl Into<String>,
     once: bool,
 ) -> Result<u64> {
+    super::movement::watch_attachment_signal(lua, ctx, id, key)?;
     let hub = app_hub(lua)?;
     let mut hub = hub.borrow_mut();
     let key = (world_key(ctx), id.to_owned(), key.to_owned());
@@ -535,6 +544,7 @@ impl UserData for SignalHandle {
                     let once = key == "Once";
                     let signal_key = this.key.clone();
                     let weak = this.hub.clone();
+                    let world = this.world.clone();
                     let core = lua.create_function(move |lua, args: MultiValue| {
                         let callback = args
                             .iter()
@@ -551,6 +561,9 @@ impl UserData for SignalHandle {
                         let hub = weak.upgrade().ok_or_else(|| {
                             mlua::Error::RuntimeError("local signal hub has been released".into())
                         })?;
+                        if let Some(world) = world.upgrade() {
+                            super::movement::watch_attachment_signal(lua, &world, &signal_key.1, &signal_key.2)?;
+                        }
                         lua.create_userdata(connect_to(lua, &hub, &signal_key, callback, once)?)
                     })?;
                     Ok(Value::Function(normalize_lua_errors(lua, core)?))
@@ -558,7 +571,11 @@ impl UserData for SignalHandle {
                 "Wait" | "wait" => {
                     let weak = this.hub.clone();
                     let key = this.key.clone();
+                    let world = this.world.clone();
                     let register = lua.create_function(move |lua, ()| {
+                        if let Some(world) = world.upgrade() {
+                            super::movement::watch_attachment_signal(lua, &world, &key.1, &key.2)?;
+                        }
                         register_waiter(lua, key.clone(), weak.clone())
                     })?;
                     let factory: Function = lua
