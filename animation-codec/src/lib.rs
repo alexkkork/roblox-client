@@ -107,7 +107,7 @@ fn rig_data(node: &Instance) -> Result<Value, &'static str> {
     }
     // Retargeting must consume these fields before claiming rig-data support.
     // Preserve exact bytes rather than silently dropping the auxiliary record.
-    Ok(json!({"fields":fields,"interpreted":false}))
+    Ok(json!({"name":node.name,"fields":fields,"interpreted":false}))
 }
 
 fn pose(
@@ -154,6 +154,10 @@ fn pose(
     let weight = number(node, "Weight", 1.0)?;
     if weight != 1.0 {
         sample["weight"] = json!(weight);
+    }
+    let mask_weight = number(node, "MaskWeight", 0.0)?;
+    if mask_weight != 0.0 {
+        sample["mask_weight"] = json!(mask_weight);
     }
     for key in ["EasingStyle", "EasingDirection"] {
         let value = enumeration(node, key)?;
@@ -335,7 +339,8 @@ fn decode_dom(dom: &WeakDom) -> Result<Value, &'static str> {
     });
     let length = frames.last().unwrap()["time"].clone();
     Ok(
-        json!({"version":1,"kind":"KeyframeSequence","looped":looped,
+        json!({"version":1,"kind":"KeyframeSequence","name":clip.name,"looped":looped,
+        "authored_hip_height":number(clip,"AuthoredHipHeight",1.35)?,
         "priority":enumeration(clip,"Priority")?,"length":length,"keyframes":frames,"rig_data":rigs}),
     )
 }

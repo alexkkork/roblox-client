@@ -17,12 +17,14 @@ pub(super) struct Channel {
     pub path: Vec<String>,
     keys: Vec<Key>,
 }
-struct Key {
+pub(super) struct Key {
+    pub frame_index: usize,
     time: f64,
-    frame: CFrameValue,
-    weight: f64,
-    style: i32,
-    direction: i32,
+    pub frame: CFrameValue,
+    pub weight: f64,
+    pub mask_weight: f64,
+    pub style: i32,
+    pub direction: i32,
 }
 
 fn number(value: &Json, default: f64) -> mlua::Result<f64> {
@@ -65,9 +67,11 @@ impl Clip {
     pub fn compile(input: &Json) -> mlua::Result<Self> {
         let mut channels: BTreeMap<Vec<String>, Vec<Key>> = BTreeMap::new();
         let mut count = 0usize;
-        for frame in input["keyframes"]
+        for (frame_index, frame) in input["keyframes"]
             .as_array()
             .ok_or_else(|| err("invalid animation keyframes"))?
+            .iter()
+            .enumerate()
         {
             let time = frame["time"]
                 .as_f64()
@@ -123,9 +127,11 @@ impl Clip {
                     return Err(err("pose weight must be in 0..1"));
                 }
                 let key = Key {
+                    frame_index,
                     time,
                     frame: CFrameValue::new(position, rotation),
                     weight,
+                    mask_weight: number(&pose["mask_weight"], 0.)?,
                     style: enumeration(&pose["easing_style"], 0, 5)?,
                     direction: enumeration(&pose["easing_direction"], 0, 2)?,
                 };
@@ -176,6 +182,12 @@ impl Clip {
 }
 
 impl Channel {
+    pub fn key_at_frame(&self, frame_index: usize) -> Option<&Key> {
+        self.keys
+            .binary_search_by_key(&frame_index, |key| key.frame_index)
+            .ok()
+            .map(|index| &self.keys[index])
+    }
     pub fn sample(&self, time: f64) -> mlua::Result<(CFrameValue, f64)> {
         let end = self.keys.partition_point(|k| k.time <= time);
         let a = &self.keys[end.saturating_sub(1)];

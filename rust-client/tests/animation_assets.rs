@@ -48,8 +48,11 @@ fn execute(runtime: &mut Runtime, source: &str) -> Value {
     reply
 }
 fn finish(runtime: &mut Runtime, reply: Value) -> Value {
+    finish_with_timeout(runtime, reply, Duration::from_secs(12))
+}
+fn finish_with_timeout(runtime: &mut Runtime, reply: Value, timeout: Duration) -> Value {
     let job = reply["job_id"].as_u64().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(12);
+    let deadline = Instant::now() + timeout;
     loop {
         let status = runtime.status(job).unwrap();
         check(&status);
@@ -72,6 +75,79 @@ fn actual_asset_loading_drives_motor_and_bone_in_the_official_vm() {
     );
     let done = finish(&mut runtime, reply);
     assert_eq!(done["values"][0]["passed"].as_f64(), Some(10.));
+}
+
+#[test]
+fn clip_providers_download_edit_and_register_without_an_animator() {
+    let mut runtime =
+        Runtime::with_animation_backend(snapshot(), 32, Arc::new(backend()), None).unwrap();
+    let reply = execute(
+        &mut runtime,
+        include_str!("../../examples/animation-providers-smoke.luau"),
+    );
+    let done = finish(&mut runtime, reply);
+    assert_eq!(done["values"][0]["passed"].as_f64(), Some(21.));
+}
+
+#[test]
+fn large_provider_result_can_be_inspected_through_the_host_without_stalling() {
+    struct Large;
+    impl AnimationBackend for Large {
+        fn load(&self, _: &str) -> Result<Value, AssetError> {
+            let mut clip=animation_codec::decode(include_bytes!("../../tests/fixtures/animations/two-keyframes.rbxmx")).unwrap();
+            let template=clip["keyframes"][0].clone();
+            clip["keyframes"]=Value::Array((0..4000).map(|i| {let mut row=template.clone();row["time"]=json!(i);row}).collect());
+            clip["length"]=json!(3999);
+            Ok(clip)
+        }
+    }
+    let mut runtime=Runtime::with_animation_backend(snapshot(),32,Arc::new(Large),None).unwrap();
+    let reply=execute(&mut runtime,r#"
+        local beats=0
+        local connection=game:GetService("RunService").Heartbeat:Connect(function() beats+=1 end)
+        local clip=game:GetService("AnimationClipProvider"):GetAnimationClipAsync("rbxassetid://123")
+        assert(#clip:GetKeyframes()==4000)
+        assert(#clip:GetDescendants()==20000)
+        assert(beats>10,"clip construction blocked the frame scheduler")
+        connection:Disconnect()
+        return true
+    "#);
+    let done=finish_with_timeout(&mut runtime,reply,Duration::from_secs(30));
+    assert_eq!(done["values"][0],true);
+}
+
+#[test]
+fn actor_provider_results_replay_complete_initial_nodes_into_the_root_world() {
+    let mut world = snapshot();
+    world["nodes"].as_array_mut().unwrap().extend([
+        json!({"id":"actor","class_name":"Actor","name":"Worker","parent":"workspace","properties":{},"attributes":{},"attributes_known":true}),
+        json!({"id":"source","class_name":"LocalScript","name":"Source","parent":"actor","properties":{"Enabled":true,"Disabled":false}})
+    ]);
+    world["script_sources"] = json!({"source":{"source":r#"
+        local p=game:GetService("AnimationClipProvider")
+        local sequence=p:GetAnimationClipAsync("rbxasset://animations/two-keyframes.rbxmx")
+        sequence.Name="ActorSequence";sequence.Parent=workspace
+        assert(sequence:GetKeyframes()[2].Root.Arm.CFrame.X==4)
+        script.Parent:SetAttribute("ResultReady",true)
+    "#}});
+    let mut runtime =
+        Runtime::with_animation_backend(world, 32, Arc::new(backend()), None).unwrap();
+    let reply = execute(
+        &mut runtime,
+        r#"
+        local deadline=os.clock()+10
+        while not workspace.Worker:GetAttribute("ResultReady") and os.clock()<deadline do task.wait() end
+        assert(workspace.Worker:GetAttribute("ResultReady"),"Actor provider did not finish")
+        local s=workspace.ActorSequence
+        assert(s.Priority==Enum.AnimationPriority.Movement and s.Length==2)
+        local f=s:GetKeyframes()
+        assert(#f==2 and f[1].Name=="Start" and f[2].Name=="Finish")
+        assert(f[2].Root.Arm.CFrame.X==4 and f[2]:GetMarkers()[1].Value=="right")
+        return true
+    "#,
+    );
+    let done = finish(&mut runtime, reply);
+    assert_eq!(done["values"][0], true);
 }
 
 #[test]
@@ -219,5 +295,59 @@ fn authorized_asset_delivery_decodes_a_real_clip() {
     println!(
         "authorized animation loaded in VM: {}",
         backend.metadata.lock().unwrap()
+    );
+}
+
+#[test]
+#[ignore = "requires an authorized account file and animation asset ID"]
+fn authorized_asset_delivery_returns_an_editable_sequence() {
+    use headless_luau::account_auth::AccountSession;
+    let path = PathBuf::from(
+        std::env::var_os("ROVE_ANIMATION_COOKIE_FILE").expect("set ROVE_ANIMATION_COOKIE_FILE"),
+    );
+    let id = std::env::var("ROVE_ANIMATION_ASSET_ID")
+        .expect("set ROVE_ANIMATION_ASSET_ID")
+        .parse::<u64>()
+        .unwrap();
+    let mut account =
+        AccountSession::from_private_file(&path).expect("account file could not be loaded");
+    account.validate().expect("account validation failed");
+    let (session, _) = account.into_parts();
+    let mut runtime = Runtime::with_animation_backend(
+        snapshot(),
+        32,
+        Arc::new(AnimationAssetBackend::authenticated(None, session)),
+        None,
+    )
+    .unwrap();
+    let started = Instant::now();
+    let reply = execute(
+        &mut runtime,
+        &format!(
+            r#"
+        local p=game:GetService("AnimationClipProvider")
+        local clip=p:GetAnimationClipAsync("rbxassetid://{id}")
+        local frames=clip:GetKeyframes()
+        assert(#frames>0 and clip.Length>0)
+        local bodies,numbers,rigs=0,0,0
+        for _,node in clip:GetDescendants() do
+            if node:IsA("Pose") then bodies+=1 end
+            if node:IsA("NumberPose") then numbers+=1 end
+            if node:IsA("AnimationRigData") then rigs+=1 end
+        end
+        assert(bodies>0)
+        clip.Name="EditedLocalCopy"
+        local reference=p:RegisterActiveAnimationClip(clip)
+        assert(reference:sub(1,9)=="active://")
+        return {{frames=#frames,body_poses=bodies,number_poses=numbers,rig_records=rigs,length=clip.Length}}
+    "#
+        ),
+    );
+    let done = finish_with_timeout(&mut runtime, reply, Duration::from_secs(65));
+    assert!(done["values"][0]["body_poses"].as_f64().unwrap() > 0.);
+    println!(
+        "authorized editable animation: {}; elapsed_ms={}",
+        done["values"][0],
+        started.elapsed().as_millis()
     );
 }

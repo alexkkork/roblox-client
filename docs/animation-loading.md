@@ -22,6 +22,38 @@ account cookies or download remote assets.
 This checks asynchronous loading, clip metadata, Motor6D/Bone playback, part
 movement, clip reuse and stopping through the packaged executable.
 
+## editable clips
+
+`AnimationClipProvider:GetAnimationClipAsync` and
+`KeyframeSequenceProvider:GetKeyframeSequenceAsync` use the same loader. Each call
+returns its own detached KeyframeSequence tree, including Keyframes, nested
+Poses and markers. No Animator is needed. The results keep easing, weights,
+AuthoredHipHeight, NumberPose facial data and exact binary AnimationRigData fields.
+Facial and retargeting data can be inspected and registered again; it is not yet
+evaluated during playback.
+
+Use `GetKeyframes`, `GetPoses`, `GetSubPoses` and `GetMarkers` to inspect direct
+children. Their Add/Remove methods perform normal parenting and fire the usual
+hierarchy events. Remove detaches the object without destroying it.
+`RegisterAnimationClip` creates a local `hash://` preview ID; the active preview
+registration methods still work. Editing a retrieved tree does not change the
+cached asset or another caller's result.
+
+```powershell
+.\rove.exe run --snapshot tests/fixtures/world_snapshot.json --script examples/animation-providers-smoke.luau --content-root tests/fixtures --json
+```
+
+Provider calls yield and report errors through `pcall`. Each VM permits 32 pending
+results. Construction shares the compact clip data and creates at most 128 nodes
+per frame, within a 256 KiB effect budget. Results are limited to 65,536 nodes and
+the world's existing instance capacity. Requests expire after 60 seconds;
+cancellation and failure remove partial trees over subsequent frames.
+Actor-created trees replay their initialized nodes through the shared world.
+`GetDescendants` builds a temporary hierarchy index for linear traversal,
+preserving breadth-first sibling order and excluding destroyed nodes. Large
+downloaded clips can be inspected without repeated full-world scans.
+CurveAnimation retrieval, inventory paging and clip evaluators remain unfinished.
+
 ## live sessions
 
 `rove join --script ...` gives the animation worker the same authenticated HTTP

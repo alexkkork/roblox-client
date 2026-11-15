@@ -578,6 +578,15 @@ pub fn is_parked(scheduler: &SchedulerRef, thread: &Thread) -> bool {
         .is_some_and(|task| task.parked)
 }
 
+/// External completions must not resurrect cancelled or manually resumed tasks.
+pub fn is_waiting(lua: &Lua, thread: &Thread) -> bool {
+    thread.is_resumable()
+        && lua.app_data_ref::<SchedulerRef>().is_some_and(|scheduler| {
+            scheduler.borrow().tasks.get(&thread_key(thread))
+                .is_some_and(|task| task.parked && !task.cancelled)
+        })
+}
+
 pub fn take_yielded(scheduler: &SchedulerRef, thread: &Thread) -> Option<MultiValue> {
     match take_outcome(scheduler, thread)? {
         TaskOutcome::Yielded(values) => Some(values),

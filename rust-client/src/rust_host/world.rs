@@ -2665,14 +2665,27 @@ pub fn children(ctx: &WorldRef, id: &str) -> Vec<String> {
 }
 
 pub fn descendants(ctx: &WorldRef, id: &str) -> Vec<String> {
+    let world = ctx.borrow();
+    // Temporary headers only: one world pass, then breadth-first traversal.
+    // Repeated child scans make large downloaded animation trees quadratic.
+    let mut by_parent = HashMap::<String, Vec<&str>>::new();
+    for key in &world.node_order {
+        let key: &str = key.as_ref();
+        if let Some(parent) = world.nodes.get(key).filter(|node| !node.destroyed).and_then(|node| node.parent.clone()) {
+            by_parent.entry(parent).or_default().push(key);
+        }
+    }
+    let mut pending = by_parent.remove(id).unwrap_or_default();
     let mut result = Vec::new();
-    let mut pending = children(ctx, id);
+    let mut seen = std::collections::HashSet::from([id]);
     let mut cursor = 0;
-    while cursor < pending.len() && pending.len() <= 100_000 {
-        let child = pending[cursor].clone();
+    while cursor < pending.len() {
+        let child = pending[cursor];
         cursor += 1;
-        pending.extend(children(ctx, &child));
-        result.push(child);
+        if !seen.insert(child) { continue; }
+        result.push(child.to_owned());
+        if result.len() > 100_000 { break; }
+        if let Some(children) = by_parent.remove(child) { pending.extend(children); }
     }
     result
 }
@@ -2875,6 +2888,35 @@ pub fn create_instance(
     class: &str,
     parent: Option<&str>,
 ) -> mlua::Result<Value> {
+    create_initialized_instance(lua, ctx, class, parent, None)
+}
+
+/// Animation downloads arrive as complete initial state. One create row keeps
+/// each node atomic when an Actor replays it into the shared world.
+pub(crate) fn create_animation_node(
+    lua: &Lua,
+    ctx: &WorldRef,
+    class: &str,
+    name: &str,
+    parent: Option<&str>,
+    properties: JsonMap<String, Json>,
+) -> mlua::Result<Value> {
+    if !matches!(class, "KeyframeSequence" | "Keyframe" | "Pose" | "NumberPose" | "KeyframeMarker" | "AnimationRigData" | "Folder")
+        || name.len() > 1024
+        || serde_json::to_vec(&properties).map_err(mlua::Error::external)?.len() > 64 * 1024
+    {
+        return Err(mlua::Error::RuntimeError("animation node exceeds supported limits".into()));
+    }
+    create_initialized_instance(lua, ctx, class, parent, Some((name, properties)))
+}
+
+fn create_initialized_instance(
+    lua: &Lua,
+    ctx: &WorldRef,
+    class: &str,
+    parent: Option<&str>,
+    initial: Option<(&str, JsonMap<String, Json>)>,
+) -> mlua::Result<Value> {
     let description = constructors()
         .get("classes")
         .and_then(|c| c.get(class))
@@ -2905,7 +2947,7 @@ pub fn create_instance(
             ));
         }
         let id = allocate_local_instance_id(&mut world)?;
-        let name = description
+        let mut name = description
             .get("name")
             .and_then(Json::as_str)
             .unwrap_or(class)
@@ -2918,13 +2960,18 @@ pub fn create_instance(
                 }
             }
         }
+        if let Some((initial_name, initial_properties)) = &initial {
+            name = (*initial_name).to_owned();
+            properties.extend(initial_properties.clone());
+        }
         (id, name, properties)
     };
+    let initial_parent = initial.as_ref().and(parent.clone());
     let node = Node {
         id: id.clone(),
         class_name: class.into(),
         name: name.clone(),
-        parent: None,
+        parent: initial_parent.clone(),
         destroyed: false,
         server_owned: false,
         properties: properties.clone(),
@@ -2945,11 +2992,13 @@ pub fn create_instance(
     emit(
         ctx,
         "mutations",
-        json!({"kind":"create","node":{"id":id,"class_name":class,"name":name,"parent":null,
+        json!({"kind":"create","node":{"id":id,"class_name":class,"name":name,"parent":initial_parent,
         "properties":properties,"attributes":{},"attributes_known":true,"collection_tags":[],"collection_tags_known":true,
         "destroyed":false,"server_owned":false,"property_revisions":{}}}),
     );
-    if let Some(parent) = parent {
+    if initial.is_some() {
+        hierarchy_changed(lua, ctx, &id, None, parent.clone())?;
+    } else if let Some(parent) = parent {
         set_property(lua, ctx, &id, "Parent", json!({"$ref":parent}))?;
     }
     instance(lua, ctx, &id)

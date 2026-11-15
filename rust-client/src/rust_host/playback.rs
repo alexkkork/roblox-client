@@ -35,6 +35,10 @@ mod animation_clip;
 mod animation_poses;
 #[path = "animation_registration.rs"]
 mod animation_registration;
+#[path = "animation_fetch.rs"]
+mod animation_fetch;
+#[path = "animation_tree.rs"]
+mod animation_tree;
 
 #[derive(Clone, Debug)]
 struct TweenInfo {
@@ -207,7 +211,7 @@ struct Store {
     sounds: Vec<SoundState>,
     tracks: Vec<Rc<RefCell<TrackState>>>,
     animation_requested: HashSet<String>,
-    animation_errors: HashSet<String>,
+    animation_errors: HashMap<String, String>,
     animation_clips: HashMap<String, Rc<animation_clip::Clip>>,
     animation_poses: animation_poses::State,
     animation_clip_bytes: usize,
@@ -1526,7 +1530,7 @@ impl UserData for TrackHandle {
                 let mut t = s.state.borrow_mut();
                 if lua
                     .app_data_ref::<Store>()
-                    .is_some_and(|store| store.animation_errors.contains(&t.reference))
+                    .is_some_and(|store| store.animation_errors.contains_key(&t.reference))
                 {
                     return Err(err("animation asset failed to load"));
                 }
@@ -1696,6 +1700,17 @@ impl UserData for TrackHandle {
         });
     }
 }
+fn request_animation(store: &mut Store, ctx: &WorldRef, reference: &str) -> mlua::Result<()> {
+    if store.animation_requested.contains(reference) { return Ok(()); }
+    if store.animation_requested.len() >= 128 { return Err(err("animation asset request limit exceeded")); }
+    if ctx.borrow().effects.get("animation_requests").and_then(Json::as_array).map_or(0, Vec::len) >= 128 {
+        return Err(err("animation request effect queue limit exceeded"));
+    }
+    store.animation_requested.insert(reference.to_owned());
+    world::emit(ctx, "animation_requests", json!({"reference":reference}));
+    Ok(())
+}
+
 fn animator_load(
     lua: &Lua,
     ctx: &WorldRef,
@@ -1748,22 +1763,7 @@ fn animator_load(
         return Err(err("animation track limit exceeded"));
     }
     let clip = store.animation_clips.get(&reference).cloned();
-    if !store.animation_requested.contains(&reference) {
-        if store.animation_requested.len() >= 128 {
-            return Err(err("animation asset request limit exceeded"));
-        }
-        let count = ctx
-            .borrow()
-            .effects
-            .get("animation_requests")
-            .and_then(Json::as_array)
-            .map_or(0, Vec::len);
-        if count >= 128 {
-            return Err(err("animation request effect queue limit exceeded"));
-        }
-        store.animation_requested.insert(reference.clone());
-        world::emit(ctx, "animation_requests", json!({"reference":reference}));
-    }
+    request_animation(&mut store, ctx, &reference)?;
     let track_id = format!("local-track-{}", store.tracks.len() + 1);
     let state = Rc::new(RefCell::new(TrackState {
         id: track_id,
@@ -1921,10 +1921,11 @@ fn complete_loaded_one(lua: &Lua, response: &Json) -> mlua::Result<()> {
     let ctx = {
         let Some(store) = lua.app_data_ref::<Store>() else { return Ok(()); };
         // A caller may have supplied a manual response while the worker was loading.
-        if !store.animation_requested.contains(reference) || store.animation_clips.contains_key(reference) || store.animation_errors.contains(reference) {
+        if !store.animation_requested.contains(reference) || store.animation_clips.contains_key(reference) || store.animation_errors.contains_key(reference) {
             return Ok(());
         }
         store.tracks.first().map(|t| t.borrow().world.clone())
+            .or_else(|| lua.app_data_ref::<std::rc::Weak<RefCell<world::World>>>().and_then(|w| w.upgrade()))
     };
     let failure = match complete_animation_entries(lua, std::slice::from_ref(response)) {
         Ok(()) => response.get("error").and_then(Json::as_str),
@@ -1960,7 +1961,7 @@ fn complete_animation_entries(lua: &Lua, entries: &[Json]) -> mlua::Result<()> {
             if !store.animation_requested.contains(&reference)
                 || !seen.insert(reference.clone())
                 || store.animation_clips.contains_key(&reference)
-                || store.animation_errors.contains(&reference)
+                || store.animation_errors.contains_key(&reference)
             {
                 return Err(err("unexpected or duplicate animation response"));
             }
@@ -1968,7 +1969,7 @@ fn complete_animation_entries(lua: &Lua, entries: &[Json]) -> mlua::Result<()> {
                 if !failure.as_str().is_some_and(|s| s.len() <= 128) {
                     return Err(err("invalid animation error response"));
                 }
-                validated.push((reference, None));
+                validated.push((reference, None, failure.as_str().unwrap().to_owned()));
                 continue;
             }
             let clip = response
@@ -2047,6 +2048,7 @@ fn complete_animation_entries(lua: &Lua, entries: &[Json]) -> mlua::Result<()> {
             validated.push((
                 reference,
                 Some(Rc::new(animation_clip::Clip::compile(clip)?)),
+                String::new(),
             ));
         }
     }
@@ -2057,7 +2059,7 @@ fn complete_animation_entries(lua: &Lua, entries: &[Json]) -> mlua::Result<()> {
             .map(|track| track.borrow().world.clone())
     });
     let mut store = ensure_store(lua);
-    for (reference, clip) in validated {
+    for (reference, clip, failure) in validated {
         if let Some(clip) = clip {
             for track in &store.tracks {
                 let mut t = track.borrow_mut();
@@ -2078,7 +2080,7 @@ fn complete_animation_entries(lua: &Lua, entries: &[Json]) -> mlua::Result<()> {
             }
             store.animation_clips.insert(reference, clip);
         } else {
-            store.animation_errors.insert(reference.clone());
+            store.animation_errors.insert(reference.clone(), failure);
             for track in &store.tracks {
                 let mut t = track.borrow_mut();
                 if t.reference == reference {
@@ -2160,6 +2162,7 @@ pub fn install(lua: &Lua, ctx: &WorldRef) -> mlua::Result<()> {
     }
     world::register_getter(ctx, "AnimationPlayed", animation_played_getter);
     animation_registration::install(ctx);
+    animation_fetch::install(ctx);
     ensure_store(lua);
     Ok(())
 }
@@ -2419,6 +2422,7 @@ pub fn step(lua: &Lua, ctx: &WorldRef, elapsed: f64) -> mlua::Result<()> {
     store.tracks.retain(|t| !t.borrow().id.is_empty());
     drop(store);
     animation_poses::step(lua, ctx)?;
+    animation_fetch::step(lua)?;
     Ok(())
 }
 

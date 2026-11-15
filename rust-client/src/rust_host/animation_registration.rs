@@ -27,26 +27,71 @@ fn enum_number(ctx: &WorldRef, id: &str, key: &str, default: i64) -> mlua::Resul
     }
 }
 fn sequence(ctx: &WorldRef, id: &str) -> mlua::Result<Json> {
+    // One ordered pass avoids rescanning the entire world for every pose.
+    let mut children = HashMap::<String, Vec<String>>::new();
+    {
+        let world = ctx.borrow();
+        for id in world::ordered_ids(ctx) {
+            if let Some(node) = world.nodes.get(&id).filter(|n| !n.destroyed) {
+                if let Some(parent) = &node.parent {
+                    children.entry(parent.clone()).or_default().push(id.clone());
+                }
+            }
+        }
+    }
     let mut frames = Vec::new();
-    let mut count = 0;
-    for key in world::children(ctx, id) {
-        if !world::is_a(ctx, &key, "Keyframe") {
+    let mut rigs = Vec::new();
+    let mut count = 1;
+    for key in children.get(id).into_iter().flatten() {
+        if world::is_a(ctx, key, "AnimationRigData") {
+            let mut fields = serde_json::Map::new();
+            for field in [
+                "label",
+                "name",
+                "parent",
+                "preTransform",
+                "postTransform",
+                "transform",
+            ] {
+                if let Ok(value) = world::get_property(ctx, key, field) {
+                    if value.is_null() {
+                        continue;
+                    }
+                    let hex = if let Some(hex) = value.get("$bytes_hex").and_then(Json::as_str) {
+                        hex.to_owned()
+                    } else if let Some(text) = value.as_str() {
+                        text.bytes().map(|b| format!("{b:02x}")).collect::<String>()
+                    } else {
+                        return Err(err("animation rig field must contain bytes"));
+                    };
+                    fields.insert(field.into(), json!({"bytes_hex":hex}));
+                }
+            }
+            rigs.push(json!({"name":name(ctx,key)?,"fields":fields,"interpreted":false}));
+            count += 1;
+            continue;
+        }
+        if !world::is_a(ctx, key, "Keyframe") {
             return Err(err("local animation preview requires Keyframe children"));
         }
         count += 1;
-        let time = world::get_property(ctx, &key, "Time")?
+        let time = world::get_property(ctx, key, "Time")?
             .as_f64()
             .filter(|n| n.is_finite() && (0. ..=86400.).contains(n))
             .ok_or_else(|| err("invalid Keyframe.Time"))?;
         let mut poses = Vec::new();
+        let mut numbers = Vec::new();
         let mut markers = Vec::new();
-        let mut pending = world::children(ctx, &key)
+        let mut pending = children
+            .get(key)
             .into_iter()
-            .map(|id| (id, Vec::<String>::new()))
+            .flatten()
+            .rev()
+            .map(|id| (id.clone(), Vec::<String>::new()))
             .collect::<Vec<_>>();
-        while let Some((node, path)) = pending.pop() {
+        while let Some((node, mut path)) = pending.pop() {
             count += 1;
-            if count > 20_000 || path.len() >= 64 {
+            if count > 65_536 || path.len() >= 64 {
                 return Err(err("local animation preview size limit exceeded"));
             }
             let node_name = name(ctx, &node)?;
@@ -56,25 +101,55 @@ fn sequence(ctx: &WorldRef, id: &str) -> mlua::Result<Json> {
                 );
                 continue;
             }
-            if !world::is_a(ctx, &node, "Pose") {
-                return Err(err("local animation preview requires Pose children"));
+            path.push(node_name.clone());
+            if world::is_a(ctx, &node, "Pose") {
+                let frame = world::get_property(ctx, &node, "CFrame")?;
+                let mut sample = json!({"path":path,"position":frame.pointer("/$cframe/position"),"rotation":frame.pointer("/$cframe/rotation")});
+                for (property, field, default) in [
+                    ("Weight", "weight", json!(1.)),
+                    ("MaskWeight", "mask_weight", json!(0.)),
+                    ("EasingStyle", "easing_style", json!(0)),
+                    ("EasingDirection", "easing_direction", json!(0)),
+                ] {
+                    let value = if property.starts_with("Easing") {
+                        enum_number(ctx, &node, property, 0)?
+                    } else {
+                        world::get_property(ctx, &node, property)?
+                    };
+                    if value.as_f64() != default.as_f64() {
+                        sample[field] = value;
+                    }
+                }
+                poses.push(sample);
+            } else if world::is_a(ctx, &node, "NumberPose")
+                && path.len() >= 3
+                && path[path.len() - 2] == "FaceControls"
+            {
+                if children.get(&node).is_some_and(|c| !c.is_empty()) {
+                    return Err(err("number pose children are unsupported"));
+                }
+                numbers.push(json!({"path":path,"value":world::get_property(ctx,&node,"Value")?,"weight":world::get_property(ctx,&node,"Weight")?,
+                    "easing_style":enum_number(ctx,&node,"EasingStyle",0)?,"easing_direction":enum_number(ctx,&node,"EasingDirection",0)?}));
+            } else if !(world::is_a(ctx, &node, "Folder")
+                && node_name == "FaceControls"
+                && path.len() >= 2
+                && path[path.len() - 2] == "Head")
+            {
+                return Err(err("unsupported local animation child"));
             }
-            let mut path = path;
-            path.push(node_name);
-            let frame = world::get_property(ctx, &node, "CFrame")?;
-            poses.push(json!({"path":path,"position":frame.pointer("/$cframe/position"),"rotation":frame.pointer("/$cframe/rotation"),
-                "weight":world::get_property(ctx,&node,"Weight")?,"easing_style":enum_number(ctx,&node,"EasingStyle",0)?,
-                "easing_direction":enum_number(ctx,&node,"EasingDirection",0)?}));
             pending.extend(
-                world::children(ctx, &node)
+                children
+                    .get(&node)
                     .into_iter()
-                    .map(|id| (id, path.clone())),
+                    .flatten()
+                    .rev()
+                    .map(|id| (id.clone(), path.clone())),
             );
-            if pending.len() + count > 20_000 {
+            if pending.len() + count > 65_536 {
                 return Err(err("local animation preview size limit exceeded"));
             }
         }
-        frames.push(json!({"time":time,"name":name(ctx,&key)?,"poses":poses,"markers":markers}));
+        frames.push(json!({"time":time,"name":name(ctx,key)?,"poses":poses,"number_poses":numbers,"markers":markers}));
     }
     frames.sort_by(|a, b| {
         a["time"]
@@ -82,11 +157,17 @@ fn sequence(ctx: &WorldRef, id: &str) -> mlua::Result<Json> {
             .unwrap()
             .total_cmp(&b["time"].as_f64().unwrap())
     });
+    if count > 65_536 {
+        return Err(err("local animation preview size limit exceeded"));
+    }
     Ok(
-        json!({"version":1,"kind":"KeyframeSequence","length":frames.last().map(|f|f["time"].clone()).unwrap_or(json!(0.)),
-        "looped":world::get_property(ctx,id,"Loop")?,"priority":enum_number(ctx,id,"Priority",1000)?,"keyframes":frames}),
+        json!({"version":1,"kind":"KeyframeSequence","name":name(ctx,id)?,
+        "authored_hip_height":world::get_property(ctx,id,"AuthoredHipHeight").unwrap_or(json!(1.35)),
+        "length":frames.last().map(|f|f["time"].clone()).unwrap_or(json!(0.)),
+        "looped":world::get_property(ctx,id,"Loop")?,"priority":enum_number(ctx,id,"Priority",1000)?,"keyframes":frames,"rig_data":rigs}),
     )
 }
+
 fn register(lua: &Lua, ctx: &WorldRef, args: MultiValue, active: bool) -> mlua::Result<MultiValue> {
     let arg = args
         .front()
@@ -182,7 +263,104 @@ fn get_direction(lua: &Lua, ctx: &WorldRef, id: &str) -> mlua::Result<Option<Val
 fn get_priority(lua: &Lua, ctx: &WorldRef, id: &str) -> mlua::Result<Option<Value>> {
     get_enum(lua, ctx, id, "Priority")
 }
+fn add_child(lua: &Lua, ctx: &WorldRef, id: &str, args: MultiValue) -> mlua::Result<MultiValue> {
+    reparent(lua, ctx, id, args, true)
+}
+fn remove_child(lua: &Lua, ctx: &WorldRef, id: &str, args: MultiValue) -> mlua::Result<MultiValue> {
+    reparent(lua, ctx, id, args, false)
+}
+fn reparent(
+    lua: &Lua,
+    ctx: &WorldRef,
+    id: &str,
+    args: MultiValue,
+    add: bool,
+) -> mlua::Result<MultiValue> {
+    let value = args
+        .front()
+        .ok_or_else(|| err("animation child method expects an Instance"))?;
+    let child = world::instance_id(value)
+        .filter(|_| world::instance_belongs_to(value, ctx))
+        .ok_or_else(|| err("animation child must be an Instance in this world"))?;
+    if !ctx.borrow().nodes.get(&child).is_some_and(|n| !n.destroyed) {
+        return Err(err("animation child was destroyed"));
+    }
+    world::set_property(
+        lua,
+        ctx,
+        &child,
+        "Parent",
+        if add { json!({"$ref":id}) } else { Json::Null },
+    )?;
+    Ok(MultiValue::new())
+}
+fn list(lua: &Lua, ctx: &WorldRef, id: &str, class: &str) -> mlua::Result<MultiValue> {
+    let result = lua.create_table()?;
+    for child in world::children(ctx, id)
+        .into_iter()
+        .filter(|id| world::is_a(ctx, id, class))
+    {
+        result.raw_push(world::instance(lua, ctx, &child)?)?;
+    }
+    Ok(MultiValue::from_vec(vec![Value::Table(result)]))
+}
+fn keyframes(lua: &Lua, ctx: &WorldRef, id: &str, _: MultiValue) -> mlua::Result<MultiValue> {
+    list(lua, ctx, id, "Keyframe")
+}
+fn poses(lua: &Lua, ctx: &WorldRef, id: &str, _: MultiValue) -> mlua::Result<MultiValue> {
+    list(lua, ctx, id, "Pose")
+}
+fn markers(lua: &Lua, ctx: &WorldRef, id: &str, _: MultiValue) -> mlua::Result<MultiValue> {
+    list(lua, ctx, id, "KeyframeMarker")
+}
+fn length(_: &Lua, ctx: &WorldRef, id: &str) -> mlua::Result<Option<Value>> {
+    if !world::is_a(ctx, id, "KeyframeSequence") {
+        return Ok(None);
+    }
+    let mut length = 0.0_f64;
+    for key in world::children(ctx, id)
+        .into_iter()
+        .filter(|id| world::is_a(ctx, id, "Keyframe"))
+    {
+        if let Ok(time) = world::get_property(ctx, &key, "Time") {
+            if let Some(time) = time.as_f64() {
+                length = length.max(time);
+            }
+        }
+    }
+    Ok(Some(Value::Number(length)))
+}
 pub(super) fn install(ctx: &WorldRef) {
+    world::register_method(
+        ctx,
+        "AnimationClipProvider",
+        "RegisterAnimationClip",
+        register_hash,
+    );
+    for (class, add, remove, get, getter) in [
+        (
+            "KeyframeSequence",
+            "AddKeyframe",
+            "RemoveKeyframe",
+            "GetKeyframes",
+            keyframes as world::Method,
+        ),
+        ("Keyframe", "AddPose", "RemovePose", "GetPoses", poses),
+        (
+            "Keyframe",
+            "AddMarker",
+            "RemoveMarker",
+            "GetMarkers",
+            markers,
+        ),
+        ("Pose", "AddSubPose", "RemoveSubPose", "GetSubPoses", poses),
+    ] {
+        world::register_method(ctx, class, add, add_child);
+        world::register_method(ctx, class, remove, remove_child);
+        world::register_method(ctx, class, get, getter);
+    }
+    world::register_getter(ctx, "Length", length);
+
     world::register_method(
         ctx,
         "AnimationClipProvider",
