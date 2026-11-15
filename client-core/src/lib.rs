@@ -2,6 +2,7 @@
 //! no vm or account credentials here, and nothing connects on its own.
 pub mod channels;
 pub mod console;
+pub mod entropy;
 pub mod journal;
 pub mod lightweight;
 pub mod memory;
@@ -24,3 +25,5 @@ pub mod timing;
 pub mod transport;
 pub mod wire;
 pub mod world;
+#[cfg(windows)]
+pub mod windows_private;

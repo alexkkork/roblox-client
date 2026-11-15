@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "sequence": 1,
+  "display": {
+    "size": [800, 600],
+    "device_insets": [0, 0, 0, 0],
+    "core_insets": [0, 36, 0, 0]
+  },
+  "services": {"Workspace": "ws", "GuiService": "gui"},
+  "nodes": [
+    {"id": "ws", "class_name": "Workspace", "name": "Workspace", "parent": null, "properties": {}},
+    {"id": "gui", "class_name": "GuiService", "name": "GuiService", "parent": null, "properties": {}}
+  ]
+}

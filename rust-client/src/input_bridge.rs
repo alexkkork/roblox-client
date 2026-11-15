@@ -6,7 +6,6 @@
 
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
-use std::io::Read;
 use std::time::{Duration, Instant};
 
 const KEY_CODES: &str = include_str!("../../ui/keyboard-codes.json");
@@ -665,8 +664,7 @@ fn quad(value: Option<&Value>, message: &str) -> Result<[f64; 4], InputError> {
 }
 fn random_lease() -> Result<String, InputError> {
     let mut bytes = [0u8; 24];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut bytes))
+    rove_client_core::entropy::fill(&mut bytes)
         .map_err(|_| InputError("Could not create a secure keyboard lease".into()))?;
     Ok(base64::Engine::encode(
         &base64::engine::general_purpose::URL_SAFE_NO_PAD,

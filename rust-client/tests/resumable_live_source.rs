@@ -97,14 +97,26 @@ fn opted_in_non_yielding_loop_still_hits_the_existing_two_second_cap() {
     let job_id = first["job_id"]
         .as_u64()
         .expect("execute must return the authored job id");
-    let deadline = Instant::now() + Duration::from_secs(3);
+    // This cap counts execution inside the VM, not time spent sleeping or
+    // waiting for the host scheduler. Leave wall-clock headroom on busy CI
+    // machines, and check the actual execution counter on every active poll.
+    let deadline = Instant::now() + Duration::from_secs(15);
     let mut result = completed(&first, job_id);
     let mut response = first;
     while result.is_none() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(1));
+        std::thread::yield_now();
         response = runtime.call(json!({"op":"poll","timeout_ms":5})).unwrap();
         successful(&response).unwrap();
         result = completed(&response, job_id);
+        for row in response["job_diagnostics"].as_array().unwrap() {
+            if row["job_id"].as_u64() == Some(job_id) {
+                let execution_ms = row["execution_ms"].as_f64().unwrap();
+                assert!(
+                    execution_ms <= 2000.0,
+                    "non-yielding job remained active beyond its CPU cap: {row}"
+                );
+            }
+        }
     }
     let elapsed = started.elapsed();
     let result = result.unwrap_or_else(|| {

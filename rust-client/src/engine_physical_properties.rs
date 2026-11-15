@@ -2,10 +2,9 @@
 //! Argument parsing and Lua errors remain in C++; this module only accepts
 //! bounded primitive arrays and returns before C++ can raise an error.
 
-use std::{
-    panic::{catch_unwind, AssertUnwindSafe},
-    sync::Once,
-};
+use std::panic::{catch_unwind, AssertUnwindSafe};
+#[cfg(not(feature = "rust-host"))]
+use std::sync::Once;
 
 const MINIMUM: [f64; 6] = [0.0001, 0.0, 0.0, 0.0, 0.0, 0.0];
 const MAXIMUM: [f64; 6] = [100.0, 2.0, 1.0, 100.0, 100.0, 1.0];
@@ -21,6 +20,7 @@ pub struct PhysicalPropertiesValue {
     pub acoustic_absorption: f32,
 }
 
+#[cfg(not(feature = "rust-host"))]
 #[repr(C)]
 struct PhysicalPropertiesApi {
     make: unsafe extern "C" fn(*const f64, usize, *mut PhysicalPropertiesValue) -> i32,
@@ -28,17 +28,20 @@ struct PhysicalPropertiesApi {
         unsafe extern "C" fn(*const PhysicalPropertiesValue, *const PhysicalPropertiesValue) -> i32,
 }
 
+#[cfg(not(feature = "rust-host"))]
 static API: PhysicalPropertiesApi = PhysicalPropertiesApi {
     make: rove_physical_properties_make,
     equal: rove_physical_properties_equal,
 };
 
+#[cfg(not(feature = "rust-host"))]
 extern "C" {
     fn rove_set_physical_properties_api(api: *const PhysicalPropertiesApi) -> i32;
 }
 
 /// Register the immutable numeric callbacks with the thin native Luau shim.
 /// Called by the central Rust engine bridge before any VM is created.
+#[cfg(not(feature = "rust-host"))]
 pub fn install() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {

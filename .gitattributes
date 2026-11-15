@@ -8,4 +8,5 @@ ui/avatar-viewer.js -whitespace linguist-generated=true
 ui/world-viewer.js -whitespace linguist-generated=true
 vendor/** -whitespace linguist-vendored=true
 runtime/vendor/** -whitespace linguist-vendored=true
+rust-runtime-sys/vendor/** -whitespace linguist-vendored=true
 vendor/roblox-player-scripts-745/** -text

@@ -25,6 +25,7 @@ fn schema() -> Schema {
         "Humanoid",
         "DataModel",
         "SurfaceAppearance",
+        "Attachment",
     ]
     .into_iter()
     .enumerate()
@@ -33,6 +34,8 @@ fn schema() -> Schema {
         name: name.into(),
         properties: if name == "Part" {
             vec![0, 1, 2]
+        } else if name == "Attachment" {
+            vec![3,4,5,6]
         } else {
             vec![]
         },
@@ -71,6 +74,10 @@ fn schema() -> Schema {
                 enum_id: None,
                 lr_type: None,
             },
+            PropertyDesc { id:3, class:9, name:"CFrame".into(),type_id:27,enum_id:None,lr_type:None },
+            PropertyDesc { id:4, class:9, name:"Position".into(),type_id:22,enum_id:None,lr_type:None },
+            PropertyDesc { id:5, class:9, name:"Axis".into(),type_id:22,enum_id:None,lr_type:None },
+            PropertyDesc { id:6, class:9, name:"SecondaryAxis".into(),type_id:22,enum_id:None,lr_type:None },
         ],
         events: vec![],
         strings: vec![],
@@ -131,7 +138,46 @@ fn compact_shared_part(mut snapshot: Value) -> Value {
     part["origins"] = json!({});
     part["property_revisions"] = json!({});
     part["_rust_shared_node"] = json!(true);
+    for node in snapshot["nodes"].as_array_mut().unwrap() {
+        if node["class_name"] == "Attachment" {
+            node["properties"]=json!({});node["origins"]=json!({});
+            node["property_revisions"]=json!({});node["_rust_shared_node"]=json!(true);
+        }
+    }
     snapshot
+}
+
+#[test]
+fn shared_attachment_receipts_preserve_axis_history_and_clone_current_pose() {
+    let mut raw=raw_snapshot();
+    raw["nodes"].as_array_mut().unwrap().push(json!({
+        "id":"scope:attachment","class_name":"Attachment","name":"Point","parent":"scope:root-1",
+        "properties":{"Archivable":true,"CFrame":{"position":[1,2,3],"rotation_id":2}},
+        "origins":{"CFrame":"received"},"property_revisions":{"CFrame":7}
+    }));
+    let mut h=Harness::from_raw(raw);
+    h.run(r#"
+        a=workspace.SharedProbe.Point;expected=Instance.new("Attachment");expected.CFrame=a.CFrame
+        a.CFrame=CFrame.new(90,80,70)
+        function same() local x,y={a.CFrame:GetComponents()},{expected.CFrame:GetComponents()}
+            for i=1,12 do assert(math.abs(x[i]-y[i])<.0001) end
+            local c=a:Clone();assert(c.CFrame==a.CFrame)
+        end
+    "#);
+    let steps=[("Axis",[1,2,3]),("SecondaryAxis",[3,-1,1]),("Axis",[1,-2,1]),("Position",[8,9,10])];
+    for (i,(key,v)) in steps.into_iter().enumerate() {
+        let seq=i as u64+8;
+        let (delta,view)=h.apply(json!({"version":1,"delta":true,"sequence":seq,"actions":[{
+            "sequence":seq,"kind":"set","id":"scope:attachment","fields":{key:{"$vector3":v}}
+        }]}));
+        h.update_vm(delta,&view);
+        h.run(&format!("expected.{key}=Vector3.new({},{},{});same()",v[0],v[1],v[2]));
+    }
+    let (delta,view)=h.apply(json!({"version":1,"delta":true,"sequence":12,"actions":[{
+        "sequence":12,"kind":"set","id":"scope:attachment","fields":{"CFrame":{"position":[4,5,6],"rotation_id":2}}
+    }]}));
+    h.update_vm(delta,&view);
+    h.run("expected.CFrame=CFrame.new(4,5,6);same()");
 }
 
 struct Harness {

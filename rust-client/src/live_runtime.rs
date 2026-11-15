@@ -19,7 +19,7 @@ use std::{
     path::Path,
     sync::{Arc, Condvar, Mutex},
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const MAX_SOURCE: usize = 100 * 1024 * 1024;
@@ -36,6 +36,7 @@ const BATCH_BYTES: usize = 4 * 1024 * 1024;
 pub struct RuntimeConfig {
     source: String,
     memory: u32,
+    animation_backend: Option<Arc<dyn crate::animation_assets::AnimationBackend>>,
 }
 impl RuntimeConfig {
     #[cfg(test)]
@@ -43,6 +44,7 @@ impl RuntimeConfig {
         Self {
             source: source.into(),
             memory: 32,
+            animation_backend: None,
         }
     }
     pub fn from_file(path: &Path, memory: u32) -> Result<Self, String> {
@@ -62,7 +64,11 @@ impl RuntimeConfig {
             return Err("script exceeds 100 MiB".into());
         }
         let source = String::from_utf8(bytes).map_err(|_| "script must be UTF-8")?;
-        Ok(Self { source, memory })
+        Ok(Self { source, memory, animation_backend: None })
+    }
+    pub fn with_animation_backend(mut self, backend: Arc<dyn crate::animation_assets::AnimationBackend>) -> Self {
+        self.animation_backend = Some(backend);
+        self
     }
 }
 
@@ -944,10 +950,8 @@ fn vm_loop(
                 ready = snapshot["initial_replication_complete"] == true;
                 bound = snapshot["local_player"].is_string();
                 sequence = snapshot["sequence"].as_u64().unwrap_or(0);
-                vm = Some(match view.as_ref() {
-                    Some(view) => Runtime::new_with_shared_world(snapshot, config.memory, view)?,
-                    None => Runtime::new(snapshot, config.memory)?,
-                });
+                vm = Some(Runtime::with_animation_backend(snapshot, config.memory,
+                    config.animation_backend.clone().unwrap_or_else(crate::animation_assets::default_backend), view.as_ref())?);
                 initializations += 1;
             } else {
                 let delta = value;
@@ -1010,6 +1014,24 @@ fn vm_loop(
                 }
             }
         }
+        // The last delta may leave the authored coroutine ready after its
+        // slice ends. Closing the receive queue must not discard that work.
+        // Drain only runnable work, with a bounded grace period; don't wait
+        // for timers, user input, or a server reply after the queue closes.
+        if let (Some(vm), Some(job)) = (vm.as_mut(), job) {
+            let deadline = Instant::now() + Duration::from_millis(100);
+            while Instant::now() < deadline
+                && vm.status(job).ok().is_some_and(|status| {
+                    status["completed"] != true && status["scheduler_state"] == "ready"
+                })
+            {
+                let response = vm.poll_with_budget(5)?;
+                successful(&response)?;
+                observe_integrity_response(integrity, &response);
+                forward_remote_io(vm, remote_client_replies, remote_server_events,
+                    movement_intents, remote_server)?;
+            }
+        }
         Ok(())
     })();
     let mut report = json!({"ok":result.is_ok(),"initialized":vm.is_some(),"source_sha256":source_hash,
@@ -1017,7 +1039,8 @@ fn vm_loop(
         "source_submitted":job.is_some(),"snapshot_initializations":initializations,"updates_applied":packets_applied,
         "shared_world_frames_applied":shared_frames,"physics_feedback_applied":physics_feedback_applied,
         "update_batches":batches,"last_applied_sequence":sequence,"initial_replication_complete":ready,
-        "local_player_bound":bound,"engine_logic_still_native":true});
+        "local_player_bound":bound,"engine_logic_still_native":!cfg!(feature = "rust-host"),
+        "engine_host":if cfg!(feature = "rust-host") { "rust" } else { "legacy_cpp" }});
     if let Ok(queue) = physics_feedback.lock() {
         report["physics_feedback_submitted"] = json!(queue.submitted);
         report["physics_feedback_coalesced"] = json!(queue.coalesced);

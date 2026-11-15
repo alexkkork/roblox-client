@@ -52,7 +52,7 @@ pub fn current_process_rss_bytes() -> Result<u64, RssError> {
     }
     #[cfg(target_os = "macos")]
     {
-        use std::mem::{MaybeUninit, size_of};
+        use std::mem::{size_of, MaybeUninit};
 
         // SAFETY: proc_pidinfo writes a `proc_taskinfo` when its return value
         // equals the requested buffer size. The buffer has that exact SDK/
@@ -81,7 +81,11 @@ pub fn current_process_rss_bytes() -> Result<u64, RssError> {
         }
         return Ok(task.pti_resident_size);
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(windows)]
+    {
+        Ok(windows_memory_counters()?.WorkingSetSize as u64)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         Err(RssError::Unsupported)
     }
@@ -89,25 +93,58 @@ pub fn current_process_rss_bytes() -> Result<u64, RssError> {
 
 /// Kernel high-water RSS includes peaks between application samples.
 pub fn peak_process_rss_bytes() -> Result<u64, RssError> {
-    #[cfg(any(target_os="macos",target_os="linux"))]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
-        let mut usage=std::mem::MaybeUninit::<libc::rusage>::uninit();
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
         // SAFETY: getrusage initializes the exact libc layout on success.
-        if unsafe {libc::getrusage(libc::RUSAGE_SELF,usage.as_mut_ptr())} != 0 {
+        if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
             return Err(RssError::Io(io::Error::last_os_error()));
         }
-        let value=unsafe {usage.assume_init()}.ru_maxrss;
-        let value=u64::try_from(value).map_err(|_|RssError::Invalid)?;
-        #[cfg(target_os="linux")]
-        {return value.checked_mul(1024).ok_or(RssError::Invalid);}
-        #[cfg(target_os="macos")]
-        {return Ok(value);}
+        let value = unsafe { usage.assume_init() }.ru_maxrss;
+        let value = u64::try_from(value).map_err(|_| RssError::Invalid)?;
+        #[cfg(target_os = "linux")]
+        {
+            return value.checked_mul(1024).ok_or(RssError::Invalid);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            return Ok(value);
+        }
     }
-    #[cfg(not(any(target_os="macos",target_os="linux")))]
-    {Err(RssError::Unsupported)}
+    #[cfg(windows)]
+    {
+        Ok(windows_memory_counters()?.PeakWorkingSetSize as u64)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+    {
+        Err(RssError::Unsupported)
+    }
 }
 
-#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
+#[cfg(windows)]
+fn windows_memory_counters(
+) -> Result<windows_sys::Win32::System::ProcessStatus::PROCESS_MEMORY_COUNTERS, RssError> {
+    use windows_sys::Win32::System::{
+        ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
+        Threading::GetCurrentProcess,
+    };
+    let size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+    let mut counters = PROCESS_MEMORY_COUNTERS {
+        cb: size,
+        ..Default::default()
+    };
+    // The SDK struct and size match the Windows API; the pseudo-handle refers
+    // only to this process. Working set is resident memory, not private commit.
+    if unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, size) } == 0 {
+        return Err(RssError::Io(io::Error::last_os_error()));
+    }
+    if counters.WorkingSetSize == 0 || counters.PeakWorkingSetSize < counters.WorkingSetSize {
+        return Err(RssError::Invalid);
+    }
+    Ok(counters)
+}
+
+#[cfg(all(test, any(target_os = "macos", target_os = "linux", windows)))]
 mod tests {
     use super::current_process_rss_bytes;
 
@@ -117,6 +154,7 @@ mod tests {
         let second = current_process_rss_bytes().expect("second current-process RSS sample");
         assert!(first > 0, "RSS should be reported in bytes");
         assert!(second > 0, "RSS should be reported in bytes");
+        assert!(super::peak_process_rss_bytes().unwrap() >= first);
         assert!(
             first.abs_diff(second) < 256 * 1024 * 1024,
             "adjacent current-process RSS samples should be plausible"

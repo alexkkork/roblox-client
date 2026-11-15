@@ -100,11 +100,11 @@ impl AttributeStore {
         let changed = match (&value, self.values.get(name)) {
             (None, Some(old)) => !old.is_null(),
             (None, None) => !self.known,
-            (Some(new), Some(old)) => new != old,
+            (Some(new), Some(old)) => !attribute_value_eq(new, old),
             (Some(_), None) => true,
         };
         if let Some(value) = value {
-            if self.values.get(name) == Some(&value) {
+            if self.values.get(name).is_some_and(|old| attribute_value_eq(old, &value)) {
                 return Ok(false);
             }
             let map = Arc::make_mut(&mut self.values);
@@ -679,6 +679,8 @@ mod tests {
         )
         .unwrap();
         let shared = attrs.clone();
+        assert!(!attrs.set("n", Some(serde_json::json!(1.0))).unwrap());
+        assert!(Arc::ptr_eq(&attrs.values, &shared.values));
         assert!(!attrs.receive_update("n", serde_json::json!(1.0)).unwrap());
         assert!(!Arc::ptr_eq(&attrs.values, &shared.values));
         assert_eq!(attrs.values.get("n").and_then(Value::as_f64), Some(1.0));

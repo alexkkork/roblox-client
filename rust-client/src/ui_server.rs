@@ -904,17 +904,7 @@ fn serve_asset(
 /// it only for the lifetime of the local UI process.
 pub fn random_ui_key() -> io::Result<String> {
     let mut bytes = [0u8; 32];
-    #[cfg(unix)]
-    {
-        std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
-    }
-    #[cfg(not(unix))]
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "OS random token provider unavailable",
-        ));
-    }
+    rove_client_core::entropy::fill(&mut bytes)?;
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
     Ok(bytes
         .iter()
@@ -946,17 +936,45 @@ mod tests {
         data: Option<Value>,
         key: &str,
     ) -> (u16, String) {
+        use std::io::{BufRead, BufReader};
+
         let mut stream = TcpStream::connect(addr).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
         let body = data
             .map(|v| serde_json::to_vec(&v).unwrap())
             .unwrap_or_default();
         let host = format!("127.0.0.1:{}", addr.port());
         let origin = format!("http://{host}");
-        write!(stream, "{method} {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Console-Key: {key}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
-        stream.write_all(&body).unwrap();
-        let mut response = String::new();
-        stream.read_to_string(&mut response).unwrap();
-        let (head, body) = response.split_once("\r\n\r\n").unwrap();
+        let mut request = format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nX-Console-Key: {key}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).into_bytes();
+        request.extend_from_slice(&body);
+        stream.write_all(&request).unwrap();
+        // A rejected request may close with a reset after sending its response.
+        // Read the HTTP body by length instead of requiring a clean TCP EOF.
+        let mut reader = BufReader::new(stream);
+        let mut head = String::new();
+        loop {
+            let mut line = String::new();
+            assert!(reader.read_line(&mut line).unwrap() > 0);
+            if line == "\r\n" {
+                break;
+            }
+            head.push_str(&line);
+            assert!(head.len() <= 16 * 1024, "oversized HTTP response header");
+        }
+        let length: usize = head
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .expect("response needs Content-Length")
+            .1
+            .trim()
+            .parse()
+            .unwrap();
+        assert!(length <= 4 * 1024 * 1024, "oversized test response");
+        let mut body = vec![0; length];
+        reader.read_exact(&mut body).unwrap();
         let status = head
             .lines()
             .next()
@@ -966,7 +984,7 @@ mod tests {
             .unwrap()
             .parse()
             .unwrap();
-        (status, body.to_owned())
+        (status, String::from_utf8(body).unwrap())
     }
 
     fn mock_owner(rx: Receiver<UiCommand>) -> JoinHandle<()> {

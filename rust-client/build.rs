@@ -32,6 +32,10 @@ fn checked(command: &mut Command) {
 }
 
 fn main() {
+    if env::var_os("CARGO_FEATURE_RUST_HOST").is_some() {
+        // the rust host links only the pinned vm through rove-runtime-sys
+        return;
+    }
     let root = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap())
         .parent()
         .unwrap()

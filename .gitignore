@@ -4,6 +4,9 @@
 /dist/
 target/
 build/
+# this dependency calls its checked-in build scripts "build" too
+!/rust-runtime-sys/vendor/mlua-sys/build/
+!/rust-runtime-sys/vendor/mlua-sys/build/**
 node_modules/
 __pycache__/
 .venv/

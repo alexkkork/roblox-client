@@ -429,7 +429,27 @@ fn read_private_json(path: impl AsRef<Path>) -> Result<Value, SessionError> {
         use std::os::unix::fs::OpenOptionsExt;
         options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let file = rove_client_core::windows_private::open_read(path.as_ref(), LIMIT as u64)
+            .map_err(|_| {
+                SessionError::new(
+                    "Private target file must have a private Windows ACL and be under 16 KiB",
+                )
+            })?;
+        let mut bytes = Vec::new();
+        file.take((LIMIT + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|_| SessionError::new("Private target file could not be read"))?;
+        if bytes.len() > LIMIT {
+            return Err(SessionError::new(
+                "Private target file exceeded the size limit",
+            ));
+        }
+        serde_json::from_slice(&bytes)
+            .map_err(|_| SessionError::new("Private target file had an unsupported structure"))
+    }
+    #[cfg(not(any(unix, windows)))]
     return Err(SessionError::new(
         "Secure private target loading is unsupported on this platform",
     ));

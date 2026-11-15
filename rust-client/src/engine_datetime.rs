@@ -1,9 +1,8 @@
 //! Pure Rust DateTime formatting behind a bounded C ABI. Luau userdata and
 //! errors stay in the native binding; this module only converts values and bytes.
-use std::{
-    panic::{catch_unwind, AssertUnwindSafe},
-    sync::Once,
-};
+use std::panic::{catch_unwind, AssertUnwindSafe};
+#[cfg(not(feature = "rust-host"))]
+use std::sync::Once;
 
 const MAX_FORMAT_BYTES: usize = 4096;
 const MAX_LOCALE_BYTES: usize = 32;
@@ -327,6 +326,7 @@ pub unsafe extern "C" fn rove_datetime_format(
     .unwrap_or(INVALID_ARGUMENT)
 }
 
+#[cfg(not(feature = "rust-host"))]
 #[repr(C)]
 struct DateTimeApi {
     version: u32,
@@ -340,13 +340,16 @@ struct DateTimeApi {
         usize,
     ) -> i32,
 }
+#[cfg(not(feature = "rust-host"))]
 static API: DateTimeApi = DateTimeApi {
     version: 1,
     format: rove_datetime_format,
 };
+#[cfg(not(feature = "rust-host"))]
 unsafe extern "C" {
     fn local_luau_set_rust_datetime_api(api: *const DateTimeApi) -> i32;
 }
+#[cfg(not(feature = "rust-host"))]
 pub fn install() {
     static INIT: Once = Once::new();
     INIT.call_once(|| assert_eq!(unsafe { local_luau_set_rust_datetime_api(&API) }, 1));

@@ -1,6 +1,7 @@
 //! Pure Color3 math behind a C ABI. Lua stack checks and userdata stay in the
 //! thin native binding; no callback here can invoke or longjmp through Luau.
 use std::panic::{catch_unwind, AssertUnwindSafe};
+#[cfg(not(feature = "rust-host"))]
 use std::sync::Once;
 
 const OK: i32 = 0;
@@ -260,6 +261,7 @@ pub unsafe extern "C" fn rove_color3_equal(a: *const Color3Value, b: *const Colo
     })
 }
 
+#[cfg(not(feature = "rust-host"))]
 #[repr(C)]
 struct Api {
     version: u32,
@@ -272,6 +274,7 @@ struct Api {
     to_hex: unsafe extern "C" fn(*const Color3Value, *mut u8) -> i32,
     equal: unsafe extern "C" fn(*const Color3Value, *const Color3Value) -> i32,
 }
+#[cfg(not(feature = "rust-host"))]
 static API: Api = Api {
     version: 1,
     from_rgb: rove_color3_from_rgb,
@@ -282,9 +285,11 @@ static API: Api = Api {
     to_hex: rove_color3_to_hex,
     equal: rove_color3_equal,
 };
+#[cfg(not(feature = "rust-host"))]
 unsafe extern "C" {
     fn local_luau_set_rust_color3_api(api: *const Api) -> i32;
 }
+#[cfg(not(feature = "rust-host"))]
 pub fn install() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {

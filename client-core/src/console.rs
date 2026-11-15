@@ -1,7 +1,8 @@
 //! Bounded, owner-only local console transport and process session lease.
 //!
-//! The transport accepts one newline-delimited JSON request per Unix socket
-//! connection. It keeps at most one peer and reads/writes small slices per
+//! The transport accepts one newline-delimited JSON request per local connection.
+//! Unix uses an owner-only socket; Windows uses authenticated loopback TCP
+//! with a private endpoint file. It keeps at most one peer and reads/writes small slices per
 //! poll so a large request cannot monopolize the client loop.
 
 use serde_json::{json, Value};
@@ -19,6 +20,11 @@ const READ_SLICE: usize = 64 * 1024;
 const MAX_READ_PER_POLL: usize = 256 * 1024;
 const MAX_WRITE_PER_POLL: usize = 256 * 1024;
 const PEER_TTL: Duration = Duration::from_secs(60);
+
+#[cfg(windows)]
+use std::net::{TcpListener as LocalListener, TcpStream as LocalStream};
+#[cfg(unix)]
+use std::os::unix::net::{UnixListener as LocalListener, UnixStream as LocalStream};
 
 #[derive(Debug)]
 pub struct SessionLease {
@@ -69,7 +75,18 @@ impl SessionLease {
             }
             Ok(Self { _file: file })
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        {
+            let secrets = root.as_ref().join("secrets");
+            let _directory = crate::windows_private::create_directory(&secrets)
+                .map_err(|_| "Client secrets directory must have a private Windows ACL")?;
+            let file = crate::windows_private::session_lock(&secrets.join("client-session.lock"))
+                .map_err(|_| {
+                "Cannot acquire the account lease; another session may be running"
+            })?;
+            Ok(Self { _file: file })
+        }
+        #[cfg(not(any(unix, windows)))]
         {
             let _ = root;
             Err("Safe client session leases are unsupported on this platform".into())
@@ -77,10 +94,10 @@ impl SessionLease {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[derive(Debug)]
 struct Peer {
-    stream: std::os::unix::net::UnixStream,
+    stream: LocalStream,
     data: Vec<u8>,
     response: Option<Vec<u8>>,
     written: usize,
@@ -88,21 +105,28 @@ struct Peer {
 }
 
 /// One-request-per-connection local script console.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[derive(Debug)]
 pub struct ScriptConsole {
+    #[cfg(unix)]
     path: PathBuf,
+    #[cfg(unix)]
     inode: u64,
-    listener: std::os::unix::net::UnixListener,
+    #[cfg(windows)]
+    _endpoint: File,
+    #[cfg(windows)]
+    _directory: File,
+    listener: LocalListener,
     peer: Option<Peer>,
     auth_token: Option<String>,
     requests: u64,
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 impl ScriptConsole {
     /// Bind an owner-only Unix socket. Unix endpoints do not require a token;
     /// pass one to enforce a token on every request when desired.
+    #[cfg(unix)]
     pub fn bind(path: impl AsRef<Path>, auth_token: Option<String>) -> Result<Self, String> {
         use std::os::unix::{
             fs::{FileTypeExt, MetadataExt, PermissionsExt},
@@ -171,6 +195,56 @@ impl ScriptConsole {
             listener,
             peer: None,
             auth_token,
+            requests: 0,
+        })
+    }
+
+    /// Windows publishes a token and ephemeral loopback port in a private file.
+    #[cfg(windows)]
+    pub fn bind(path: impl AsRef<Path>, auth_token: Option<String>) -> Result<Self, String> {
+        let path = path.as_ref();
+        let parent = path
+            .parent()
+            .ok_or("Console endpoint needs a parent directory")?;
+        let directory = crate::windows_private::open_directory(parent)
+            .map_err(|_| "Console endpoint parent must have a private Windows ACL")?;
+        let token = match auth_token {
+            Some(token) if token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit()) => {
+                token
+            }
+            Some(_) => return Err("Windows console token must be 64 hexadecimal characters".into()),
+            None => {
+                let mut bytes = [0; 32];
+                crate::entropy::fill(&mut bytes).map_err(|_| "OS entropy unavailable")?;
+                bytes.iter().map(|b| format!("{b:02x}")).collect()
+            }
+        };
+        let listener = LocalListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .map_err(|_| "Cannot bind local client console")?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|_| "Cannot configure local client console")?;
+        let port = listener
+            .local_addr()
+            .map_err(|_| "Cannot inspect local client console")?
+            .port();
+        let mut endpoint = crate::windows_private::create_file(path, true).map_err(|_| {
+            "Cannot create private console endpoint; the path may already be in use"
+        })?;
+        serde_json::to_writer(
+            &mut endpoint,
+            &json!({"host":"127.0.0.1","port":port,"token":token}),
+        )
+        .map_err(|_| "Cannot write console endpoint")?;
+        endpoint
+            .flush()
+            .map_err(|_| "Cannot flush console endpoint")?;
+        Ok(Self {
+            _endpoint: endpoint,
+            _directory: directory,
+            listener,
+            peer: None,
+            auth_token: Some(token),
             requests: 0,
         })
     }
@@ -300,11 +374,11 @@ impl Drop for ScriptConsole {
     }
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 #[derive(Debug)]
 pub struct ScriptConsole;
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 impl ScriptConsole {
     pub fn bind(_path: impl AsRef<Path>, _auth_token: Option<String>) -> Result<Self, String> {
         Err("Safe local script consoles are unsupported on this platform".into())
@@ -390,8 +464,8 @@ fn constant_time_equal(a: &[u8], b: &[u8]) -> bool {
     diff == 0
 }
 
-/// Send a single JSON request over a local Unix socket and read its response.
-#[cfg(unix)]
+/// Send a JSON request over the local console and read its bounded response.
+#[cfg(any(unix, windows))]
 pub fn send_request(
     path: impl AsRef<Path>,
     request: Value,
@@ -401,7 +475,7 @@ pub fn send_request(
 }
 
 /// Send a request to a listener configured with a local bearer token.
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub fn send_request_with_token(
     path: impl AsRef<Path>,
     mut request: Value,
@@ -416,11 +490,49 @@ pub fn send_request_with_token(
     send_request_inner(path.as_ref(), request, timeout)
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 fn send_request_inner(path: &Path, request: Value, timeout: Duration) -> Result<Value, String> {
-    use std::{net::Shutdown, os::unix::net::UnixStream};
-    let mut stream =
-        UnixStream::connect(path).map_err(|_| "Cannot connect to local console".to_owned())?;
+    use std::net::Shutdown;
+    #[cfg(unix)]
+    let mut stream = LocalStream::connect(path).map_err(|_| "Cannot connect to local console")?;
+    #[cfg(windows)]
+    let (mut stream, request) = {
+        let file = crate::windows_private::open_read(path, 4096)
+            .map_err(|_| "Cannot read private console endpoint")?;
+        let mut bytes = Vec::new();
+        file.take(4097)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "Cannot read private console endpoint")?;
+        if bytes.len() > 4096 {
+            return Err("Console endpoint exceeds size limit".into());
+        }
+        let endpoint: Value =
+            serde_json::from_slice(&bytes).map_err(|_| "Invalid console endpoint")?;
+        if endpoint.get("host").and_then(Value::as_str) != Some("127.0.0.1") {
+            return Err("Console endpoint must be local".into());
+        }
+        let port = endpoint
+            .get("port")
+            .and_then(Value::as_u64)
+            .and_then(|port| u16::try_from(port).ok())
+            .filter(|port| *port != 0)
+            .ok_or("Invalid console endpoint port")?;
+        let token = endpoint
+            .get("token")
+            .and_then(Value::as_str)
+            .filter(|token| token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit()))
+            .ok_or("Invalid console endpoint token")?;
+        let mut request = request;
+        request
+            .as_object_mut()
+            .ok_or("Invalid console request")?
+            .entry("_console_token")
+            .or_insert_with(|| Value::String(token.to_owned()));
+        let address = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+        let stream = LocalStream::connect_timeout(&address, timeout)
+            .map_err(|_| "Cannot connect to local console")?;
+        (stream, request)
+    };
     stream
         .set_read_timeout(Some(timeout))
         .map_err(|_| "Cannot configure console timeout")?;
@@ -463,7 +575,7 @@ fn send_request_inner(path: &Path, request: Value, timeout: Duration) -> Result<
     serde_json::from_slice(&response[..end]).map_err(|_| "Invalid console response".into())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub fn send_request(
     _path: impl AsRef<Path>,
     _request: Value,
@@ -472,7 +584,7 @@ pub fn send_request(
     Err("Safe local script consoles are unsupported on this platform".into())
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 pub fn send_request_with_token(
     _path: impl AsRef<Path>,
     _request: Value,
@@ -482,34 +594,46 @@ pub fn send_request_with_token(
     Err("Safe local script consoles are unsupported on this platform".into())
 }
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{os::unix::fs::PermissionsExt, thread};
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    use std::thread;
 
     fn temp_dir() -> PathBuf {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let path = std::env::temp_dir().join(format!(
-            "rove-console-test-{}-{}-{}",
-            unsafe { libc::geteuid() },
+            "rove-console-test-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
-        fs::create_dir(&path).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        #[cfg(unix)]
+        {
+            fs::create_dir(&path).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        #[cfg(windows)]
+        drop(crate::windows_private::create_directory(&path).unwrap());
         path
     }
 
     #[test]
     fn lease_is_private_exclusive_and_released_on_drop() {
         let root = temp_dir();
-        fs::create_dir(root.join("secrets")).unwrap();
-        fs::set_permissions(root.join("secrets"), fs::Permissions::from_mode(0o700)).unwrap();
+        #[cfg(unix)]
+        {
+            fs::create_dir(root.join("secrets")).unwrap();
+            fs::set_permissions(root.join("secrets"), fs::Permissions::from_mode(0o700)).unwrap();
+        }
         let first = SessionLease::acquire(&root).unwrap();
         assert!(SessionLease::acquire(&root).is_err());
-        let metadata = fs::metadata(root.join("secrets/client-session.lock")).unwrap();
-        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        #[cfg(unix)]
+        {
+            let metadata = fs::metadata(root.join("secrets/client-session.lock")).unwrap();
+            assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        }
         drop(first);
         assert!(SessionLease::acquire(&root).is_ok());
         let _ = fs::remove_dir_all(root);
@@ -520,6 +644,7 @@ mod tests {
         let root = temp_dir();
         let path = root.join("client.sock");
         let server = ScriptConsole::bind(&path, None).unwrap();
+        #[cfg(unix)]
         assert_eq!(
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
@@ -578,7 +703,7 @@ mod tests {
     fn authenticated_console_rejects_bad_token_before_dispatch() {
         let root = temp_dir();
         let path = root.join("client.sock");
-        let mut server = ScriptConsole::bind(&path, Some("expected".into())).unwrap();
+        let mut server = ScriptConsole::bind(&path, Some("e".repeat(64))).unwrap();
         let server_thread = thread::spawn(move || {
             for _ in 0..1000 {
                 let _ = server.poll(&mut |_| panic!("unauthenticated request dispatched"));

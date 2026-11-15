@@ -1,0 +1,19 @@
+[package]
+name = "rove-runtime-sys"
+version = "0.1.0"
+edition = "2021"
+publish = false
+build = "build.rs"
+
+[dependencies]
+mlua = { version = "=0.12.2", features = ["luau"] }
+mlua-sys = { version = "=0.13.0", features = ["luau", "external"] }
+
+[build-dependencies]
+cmake = "=0.1.54"
+
+[dev-dependencies]
+mlua = { version = "=0.12.2", features = ["luau"] }
+
+[patch.crates-io]
+mlua-sys = { path = "vendor/mlua-sys" }

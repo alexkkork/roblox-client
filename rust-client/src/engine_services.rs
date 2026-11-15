@@ -5,9 +5,10 @@
 //! session owner thread; this module deliberately never owns a transport or
 //! manufactures a server response.
 
-#[cfg(target_os = "macos")]
 #[path = "engine_services/local_text.rs"]
 pub mod local_text;
+#[path = "engine_services/text_shaping.rs"]
+mod text_shaping;
 #[path = "engine_services/work_ledger.rs"]
 pub mod work_ledger;
 
@@ -549,6 +550,9 @@ fn validate_bounds_request(value: &Value) -> Result<(), &'static str> {
                 .ok_or("Invalid text run")?;
             if !run.get("style").is_some_and(Value::is_object) {
                 return Err("Invalid text run");
+            }
+            if combined.len().saturating_add(part.len()) > 4096 {
+                return Err("Invalid text runs");
             }
             combined.push_str(part);
         }
