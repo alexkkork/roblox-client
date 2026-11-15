@@ -25,6 +25,9 @@ mod world_queries;
 #[path = "world_pose_batch.rs"]
 mod world_pose_batch;
 pub(crate) use world_pose_batch::{apply_pose_batch, pose_events, PoseWrite};
+#[path = "world_model_scale.rs"]
+mod world_model_scale;
+pub(crate) use world_model_scale::apply_scale_batch;
 
 pub type WorldRef = Rc<RefCell<World>>;
 type InstanceHandleWaiters = Rc<RefCell<InstanceHandleWaitState>>;
@@ -74,6 +77,7 @@ pub struct World {
     pub services: HashMap<String, String>,
     pub snapshot: Json,
     pub(crate) camera_state: super::camera::CameraState,
+    pub(crate) scale_state: super::movement::ScaleState,
     pub sequence: u64,
     lightweight_assets: bool,
     pub effects: JsonMap<String, Json>,
@@ -105,6 +109,7 @@ impl World {
             services: self.services.clone(),
             snapshot: self.snapshot.clone(),
             camera_state: self.camera_state.clone(),
+            scale_state: self.scale_state.clone(),
             sequence: self.sequence,
             lightweight_assets: self.lightweight_assets,
             effects: JsonMap::new(),
@@ -209,6 +214,8 @@ impl World {
         self.snapshot = root.snapshot.clone();
         self.camera_state
             .sync_from_root(&root.camera_state, &self.local_namespace);
+        self.scale_state
+            .sync_from_root(&root.scale_state, &self.local_namespace);
         self.sequence = root.sequence;
         self.local_revision = self.local_revision.max(root.local_revision);
         self.next_local_id = self.next_local_id.max(root.next_local_id);
@@ -242,6 +249,7 @@ impl World {
             services: HashMap::new(),
             snapshot: Json::Null,
             camera_state: super::camera::CameraState::default(),
+            scale_state: super::movement::ScaleState::default(),
             sequence,
             lightweight_assets: root
                 .get("lightweight_assets")
@@ -540,6 +548,7 @@ impl World {
             services: self.services.clone(),
             snapshot: self.snapshot.clone(),
             camera_state: self.camera_state.clone(),
+            scale_state: self.scale_state.clone(),
             sequence: self.sequence,
             lightweight_assets: self.lightweight_assets,
             effects: self.effects.clone(),
@@ -1652,7 +1661,7 @@ pub fn register_method_closure<F>(
         .methods
         .insert((class.into(), name.into()), Rc::new(method));
 }
-fn class_chain(class: &str) -> Vec<String> {
+pub(crate) fn class_chain(class: &str) -> Vec<String> {
     let parents = class_parents();
     let mut result = Vec::new();
     let mut pending = vec![class.to_owned()];
@@ -3224,6 +3233,7 @@ pub fn apply_actor_create(
         .and_then(Json::as_object)
         .cloned()
         .unwrap_or_default();
+    let scale_state = super::movement::import_scale_baseline(root, id, record)?;
     if data.get("server_owned").and_then(Json::as_bool) == Some(true)
         || data.get("destroyed").and_then(Json::as_bool) == Some(true)
     {
@@ -3290,6 +3300,7 @@ pub fn apply_actor_create(
         node.projected = None;
         world.node_order.push(id.to_owned());
         world.nodes.insert(id.to_owned(), node.clone());
+        world.scale_state = scale_state;
         if local_service_supported(&node.class_name) {
             world
                 .services
@@ -3451,6 +3462,7 @@ pub fn clone_instance(lua: &Lua, ctx: &WorldRef, root_id: &str) -> mlua::Result<
                 .map(|(k, v)| (k.clone(), v.clone())),
         );
         world_pose_batch::preserve_pivot_mode(&original, &mut properties);
+        super::movement::preserve_scale(ctx, source_id, &mut properties);
         properties.remove("Name");
         properties.remove("Parent");
         for value in properties.values_mut() {
@@ -3489,8 +3501,11 @@ pub fn clone_instance(lua: &Lua, ctx: &WorldRef, root_id: &str) -> mlua::Result<
         clones.push(node);
     }
     let root_clone = id_map[root_id].clone();
+    let scale_state = super::movement::clone_scale_state(ctx, &id_map)?;
+    world_model_scale::check_actor_clone_journal(ctx, &clones, &scale_state)?;
     {
         let mut world = ctx.borrow_mut();
+        world.scale_state = scale_state;
         for node in &clones {
             world.node_order.push(node.id.clone());
             world.nodes.insert(node.id.clone(), node.clone());
@@ -3500,12 +3515,7 @@ pub fn clone_instance(lua: &Lua, ctx: &WorldRef, root_id: &str) -> mlua::Result<
         emit(
             ctx,
             "mutations",
-            json!({"kind":"create","node":{
-                "id":node.id,"class_name":node.class_name,"name":node.name,"parent":node.parent.map(Json::String).unwrap_or(Json::Null),
-                "properties":node.properties,"attributes":node.attributes,"attributes_known":node.attributes_known,
-                "collection_tags":node.collection_tags,"collection_tags_known":node.collection_tags_known,
-                "property_revisions":node.revisions,"destroyed":false,"server_owned":false
-            }}),
+            json!({"kind":"create","node":world_model_scale::clone_record(&node,super::movement::export_scale_baseline(ctx,&node.id))}),
         );
     }
     instance(lua, ctx, &root_clone)
@@ -3558,6 +3568,7 @@ pub fn destroy_instance(lua: &Lua, ctx: &WorldRef, root_id: &str) -> mlua::Resul
         }
     }
     let mut mutation = json!({"kind":"destroy","ids":selected});
+    for id in &selected { ctx.borrow_mut().scale_state.remove(id); }
     if actor_internal_revision {
         mutation["_base_local_revisions"] = Json::Object(base_revisions);
     }

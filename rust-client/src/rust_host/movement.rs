@@ -16,6 +16,10 @@ use std::cell::Cell;
 
 #[path = "model_pivots.rs"]
 mod pivots;
+pub(crate) use pivots::scaling::{
+    clone_scale_state, export_scale_baseline, import_scale_baseline, preserve_scale, replay_scale,
+    ScaleState,
+};
 
 fn err(message: impl Into<String>) -> mlua::Error {
     mlua::Error::RuntimeError(message.into())
@@ -274,10 +278,19 @@ fn property(ctx: &WorldRef, id: &str, name: &str) -> mlua::Result<Json> {
     world::get_property(ctx, id, name)
 }
 fn store_frame(lua: &Lua, ctx: &WorldRef, id: &str, cf: CFrameValue) -> mlua::Result<()> {
-    for (key, value) in part_fields(&cf) {
-        world::set_property(lua, ctx, id, key, value)?;
-    }
-    Ok(())
+    let fields = part_fields(&cf)
+        .into_iter()
+        .map(|(key, value)| (key.into(), value))
+        .collect();
+    let changes = world::apply_pose_batch(
+        ctx,
+        &[world::PoseWrite {
+            id: id.into(),
+            fields,
+        }],
+        false,
+    )?;
+    world::pose_events(lua, ctx, changes)
 }
 
 fn set_part_transform(

@@ -1,0 +1,78 @@
+{
+  "version": "0.745.0.7451137",
+  "cases": [
+    {
+      "before": 4.25,
+      "after": 8.5,
+      "class": "LineForce",
+      "mode": "true",
+      "property": "Magnitude",
+      "seed_ok": true,
+      "scale_ok": true
+    },
+    {
+      "before": [
+        4,
+        6,
+        8
+      ],
+      "after": [
+        4,
+        6,
+        8
+      ],
+      "class": "AlignPosition",
+      "mode": "Enum.PositionAlignmentMode.OneAttachment",
+      "property": "Position",
+      "seed_ok": true,
+      "scale_ok": true
+    },
+    {
+      "before": [
+        4,
+        6
+      ],
+      "after": [
+        8,
+        12
+      ],
+      "class": "LinearVelocity",
+      "mode": "Enum.VelocityConstraintMode.Plane",
+      "property": "PlaneVelocity",
+      "seed_ok": true,
+      "scale_ok": true
+    },
+    {
+      "before": [
+        4,
+        6
+      ],
+      "after": [
+        32,
+        48
+      ],
+      "class": "LinearVelocity",
+      "mode": "Enum.VelocityConstraintMode.Plane",
+      "property": "MaxPlanarAxesForce",
+      "seed_ok": true,
+      "scale_ok": true
+    },
+    {
+      "before": [
+        "inf",
+        4,
+        6
+      ],
+      "after": [
+        "inf",
+        32,
+        48
+      ],
+      "class": "BodyForce",
+      "mode": "nil",
+      "property": "Force",
+      "seed_ok": true,
+      "scale_ok": true
+    }
+  ]
+}

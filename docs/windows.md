@@ -65,6 +65,16 @@ the package includes a 16-check offline script:
 .\rove.exe run --snapshot tests/fixtures/camera_projection_snapshot.json --script examples/camera-projection-smoke.luau --json
 ```
 
+## model scaling
+
+`ScaleTo` and `GetScale` resize local model geometry, joints, effects, and physical properties in rust. scaling back restores the saved originals, including on clones. animator pose scaling is still unavailable.
+
+the package includes a 15-check script:
+
+```powershell
+.\rove.exe run --snapshot tests/fixtures/world_snapshot.json --script examples/model-scaling-smoke.luau --json
+```
+
 ## private files and console
 
 the console uses a random token and a loopback-only tcp port. its endpoint file is private and disappears when the process closes. account files and their directory must allow access only to your windows user, system, and administrators. create a dedicated directory before saving any credentials:

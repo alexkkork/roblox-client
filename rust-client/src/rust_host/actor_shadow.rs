@@ -318,6 +318,15 @@ pub fn merge_actor_journal(
                 world::pose_events(lua, root_world, changes)?;
                 report.applied += 1;
             }
+            "model_scale" => {
+                let cursor = mutation_rows(root_world);
+                if super::movement::replay_scale(lua, root_world, actor_world, row)? {
+                    tag_new_root_mutations(root_world, cursor, actor_id)?;
+                    report.applied += 1;
+                } else {
+                    report.conflicts.push("model_scale:stale_target".into());
+                }
+            }
             "attribute" => {
                 let id = row
                     .get("id")

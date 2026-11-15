@@ -7,6 +7,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[path = "model_scaling_actor_tests.rs"]
+mod model_scaling_tests;
+
 fn setup_worlds() -> (Lua, WorldRef, Lua, WorldRef) {
     let snapshot = json!({
         "version":1,"sequence":0,

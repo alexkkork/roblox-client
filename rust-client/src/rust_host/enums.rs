@@ -78,6 +78,8 @@ ContextActionPriority|Low=1000,Medium=2000,High=3000
 ContextActionResult|Sink=0,Pass=1
 PlayerActions|CharacterForward=0,CharacterBackward=1,CharacterLeft=2,CharacterRight=3,CharacterJump=4
 BulkMoveMode|FireAllEvents=0,FireCFrameChanged=1
+PositionAlignmentMode|OneAttachment=0,TwoAttachment=1
+VelocityConstraintMode|Line=0,Plane=1,Vector=2
 MeshType|Head=0,Torso=1,Wedge=2,Sphere=3,Cylinder=4,FileMesh=5,Brick=6,Prism=7,Pyramid=8,ParallelRamp=9,RightAngleRamp=10,CornerWedge=11
 RunContext|Legacy=0,Server=1,Client=2,Plugin=3
 Axis|X=0,Y=1,Z=2

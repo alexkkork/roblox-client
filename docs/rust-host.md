@@ -36,6 +36,10 @@ memory budget. Their remote request IDs are routed back to the issuing VM;
 unknown or mismatched responses do not complete a waiter. World metadata
 changes emit the same service and loaded-state signals as the old host.
 
+[Model scaling](model-scaling.md) adds absolute ScaleTo/GetScale, original-value
+restoration, clone baselines, dimensional force/constraint rules, and atomic
+Actor replay. Animator pose scaling remains an explicit unsupported case.
+
 | Area | Rust source |
 | --- | --- |
 | Persistent VM host and task scheduling | `rust-client/src/rust_host/session.rs`, `scheduler.rs` |
