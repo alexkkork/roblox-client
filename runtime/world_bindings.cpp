@@ -1656,7 +1656,7 @@ int instance_index(lua_State* L) {
     if(n.class_name=="HttpService"&&key=="UrlEncode"){lua_pushcfunction(L,http_url_encode,"UrlEncode");return 1;}
     if(n.class_name=="HttpService"&&key=="GenerateGUID"){lua_pushcfunction(L,generate_guid,"GenerateGUID");return 1;}
     if(n.class_name=="GuiService"&&key=="IsTenFootInterface"){lua_pushcfunction(L,gui_ten_foot_interface,"IsTenFootInterface");return 1;}
-    if(n.class_name=="RunService" && (key=="Heartbeat"||key=="RenderStepped"||key=="PreRender")) {push_signal(L,signal_for(w,n,key));return 1;}
+    if(n.class_name=="RunService" && (key=="Heartbeat"||key=="RenderStepped"||key=="PreRender"||key=="Stepped"||key=="PreSimulation"||key=="PostSimulation")) {push_signal(L,signal_for(w,n,key));return 1;}
     if(n.class_name=="ClickDetector" && (key=="MouseClick"||key=="RightMouseClick"||key=="MouseHoverEnter"||key=="MouseHoverLeave")) {push_signal(L,signal_for(w,n,key));return 1;}
     if((n.class_name=="ProximityPrompt"&&(key=="Triggered"||key=="TriggerEnded"||key=="PromptButtonHoldBegan"||key=="PromptButtonHoldEnded"))
        ||(class_is_a(w,n.class_name,"BasePart")&&(key=="Touched"||key=="TouchEnded"))) {push_signal(L,signal_for(w,n,key));return 1;}
@@ -1698,6 +1698,9 @@ int instance_index(lua_State* L) {
     const Json* value=property_value(w,n,key);
     if(!value&&n.class_name=="TextSource"&&key=="UserId")value=property_value(w,n,"UserIdReplicated");
     if(!value)for(const auto& id:w.order){Node& child=w.nodes.at(id);if(parent_id(w,child)==n.id&&instance_name(w,child)==key){push_node(L,w,&child);return 1;}}
+    // Roblox reads Player.Character as nil until a character is loaded; scripts
+    // (e.g. PlayerModule's Popper) rely on that instead of an error.
+    if(!value&&n.class_name=="Player"&&key=="Character"){lua_pushnil(L);return 1;}
     if(!value){luaL_error(L,"property '%s' unavailable in snapshot for %s (%s)",key.c_str(),n.name.c_str(),n.class_name.c_str());return 0;}
     // The replication reader retains PhysicalProperties as a 5/6-scalar
     // array. Expose the typed source value without altering received data.
@@ -3674,6 +3677,11 @@ void dispatch_events(lua_State* from,World& world) {
             world.render_steps.active=false;world.render_steps.group.clear();
         }
     }
+    // Decide whether this poll may generate a simulation frame *before* the
+    // render frame queues RenderStepped/PreRender. Checking world.events after
+    // it starved Heartbeat on every poll where a render frame was due (i.e.
+    // always, on hosts that poll slower than the render cap).
+    const bool simulation_frame_allowed=world.events.empty()&&world.scheduler->callback_capacity()>0;
     if(world.events.empty()&&!world.context_actions.active&&world.context_actions.pending.empty()&&!world.render_steps.active&&world.scheduler->callback_capacity()>0&&render_dt>0&&(world.render_cap==0||render_dt>=1.0/world.render_cap)) {
         world.render_previous=heartbeat_now;auto service=world.services.find("RunService");
         if(service!=world.services.end())if(auto* node=find_node(world,service->second)) {
@@ -3684,12 +3692,18 @@ void dispatch_events(lua_State* from,World& world) {
     // the previous timestamp while backpressured so the next actual frame
     // reports all elapsed time. Already queued events remain receipt ordered;
     // generating another frame here would amplify the backlog on every poll.
-    if(world.events.empty()&&world.scheduler->callback_capacity()>0&&heartbeat_dt>=1.0/60.0) {
+    if(simulation_frame_allowed&&heartbeat_dt>=1.0/60.0) {
         world.heartbeat_previous=heartbeat_now;
         world.heartbeat_delta=heartbeat_dt;
+        world.simulation_time+=heartbeat_dt;
         auto service=world.services.find("RunService");
-        if(service!=world.services.end())if(auto* node=find_node(world,service->second))
+        // Roblox frame order: Stepped/PreSimulation, simulation, PostSimulation, Heartbeat.
+        if(service!=world.services.end())if(auto* node=find_node(world,service->second)) {
+            emit(world,*node,"Stepped",Json::array({world.simulation_time,heartbeat_dt}));
+            emit(world,*node,"PreSimulation",Json::array({heartbeat_dt}));
+            emit(world,*node,"PostSimulation",Json::array({heartbeat_dt}));
             emit(world,*node,"Heartbeat",Json::array({heartbeat_dt}));
+        }
     }
     progress_text_service(from,world);
     for(auto it=world.chat_waiters.begin();it!=world.chat_waiters.end();) {
@@ -3818,6 +3832,7 @@ void update_snapshot(lua_State* from,World& w,const ValidatedDeltaView& validate
     const bool initial_ready=delta.value("initial_replication_complete",false);
     std::unordered_set<std::string> received_joint_poses,received_part_poses;
     std::unordered_set<std::string> refresh_rust_nodes;
+    std::unordered_map<std::string,CFrameValue> received_root_frames; // pre-update frames of moved parts
     Children removal_children;
     bool removal_children_ready=false;
     for(const auto& action:delta["actions"]) {
@@ -3870,8 +3885,10 @@ void update_snapshot(lua_State* from,World& w,const ValidatedDeltaView& validate
                 const Json* received_color=fields.contains("Color")?nullptr:received_color_alias(*n,fields);
                 const Json received_group=fields.contains("CollisionGroup")?Json(nullptr):received_collision_group_alias(*n,fields);
                 if(fields.contains("Parent"))removal_children_ready=false;
+                std::optional<CFrameValue> frame_before;
+                if(pivot_part(w,*n)&&!received_root_frames.count(id))try{frame_before=pivot_frame(w,*n,"CFrame");}catch(const std::exception&){}
                 const bool part_updated=apply_received_part_transform(w,*n,fields,sequence,&validated);
-                if(part_updated)received_part_poses.insert(id);
+                if(part_updated){received_part_poses.insert(id);if(frame_before)received_root_frames.emplace(id,*frame_before);}
                 const bool attachment_updated=apply_received_attachment_transform(w,*n,fields,sequence);
                 const bool text_font_updated=apply_received_text_font(w,*n,fields,sequence);
                 if(joint_rigid(*n)&&n->class_name!="WeldConstraint"&&(fields.contains("C0")||fields.contains("C1")||(n->class_name=="Motor6D"&&fields.contains("Transform")))) {
@@ -4091,6 +4108,8 @@ void update_snapshot(lua_State* from,World& w,const ValidatedDeltaView& validate
     if(!defer_camera_refresh)refresh_current_camera(w);
     // Complete the ordered input transaction before deriving poses or waking
     // listeners. Explicit received part poses win within this transaction.
+    // Carry first: dirty joints in the same batch are then solved on top of it.
+    carry_received_assemblies(w,received_root_frames,received_part_poses,static_cast<uint64_t>(w.sequence));
     flush_joint_poses(w,std::move(received_joint_poses),received_part_poses,static_cast<uint64_t>(w.sequence));
     if(initial_ready&&!w.initial_replication_complete) {
         w.initial_replication_complete=true;

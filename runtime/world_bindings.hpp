@@ -296,6 +296,7 @@ struct World {
     std::unordered_map<std::string,TweenPlaybackState> tweens;
     std::chrono::steady_clock::time_point heartbeat_previous{};
     double heartbeat_delta=1.0/60.0;
+    double simulation_time=0.0; // RunService.Stepped `time` argument
     std::chrono::steady_clock::time_point render_previous{};
     double render_cap=60;
     std::unordered_map<std::string,std::unordered_map<std::string,bool>> scriptability;
