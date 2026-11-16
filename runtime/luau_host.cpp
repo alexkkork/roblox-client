@@ -714,6 +714,7 @@ public:
         if(engine_pose_result.is_object()) {
             response["engine_pose_status"]=engine_pose_result.value("status",std::string("unknown"));
             response["engine_pose_frames_applied"]=engine_pose_result.value("frames_applied",size_t(0));
+            response["engine_pose_frames_carried"]=engine_pose_result.value("frames_carried",size_t(0));
         }
         if(engine_owned_part_result.is_object()) {
             response["engine_owned_part_status"]=engine_owned_part_result.value("status",std::string("unknown"));
