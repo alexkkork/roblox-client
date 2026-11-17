@@ -13,6 +13,8 @@ use std::{
 
 const REQUEST_LIMIT: usize = 608 * 1024 * 1024;
 const RESPONSE_LIMIT: usize = 1024 * 1024;
+// Wall deadline for world init/update ops (see the per-op match below).
+pub const WORLD_OP_WALL_SECONDS: u64 = 30;
 
 #[derive(serde::Deserialize)]
 struct CommandHeader {
@@ -21,13 +23,17 @@ struct CommandHeader {
 }
 
 fn closes_session(data: &[u8]) -> Result<bool, String> {
+    Ok(operation(data)?.as_deref() == Some("close"))
+}
+
+fn operation(data: &[u8]) -> Result<Option<String>, String> {
     // The native engine validates the command body. These framing processes
     // only need the operation: retaining a Value for a streamed world update
     // duplicates its entire object tree in both the supervisor and VM worker.
     // Unknown fields are still parsed/validated, but skipped without a DOM.
     let header: CommandHeader =
         serde_json::from_slice(data).map_err(|_| "invalid persistent request JSON")?;
-    Ok(header.op.as_ref().is_some_and(|op| op == "close"))
+    Ok(header.op.as_ref().and_then(Value::as_str).map(str::to_owned))
 }
 
 fn frame<R: BufRead>(reader: &mut R, limit: usize) -> Result<Option<Vec<u8>>, String> {
@@ -120,13 +126,21 @@ pub fn supervise() -> Result<(), String> {
     let source = io::stdin();
     let mut reader = source.lock();
     while let Some(data) = frame(&mut reader, REQUEST_LIMIT)? {
-        let closing = closes_session(&data)?;
+        let op = operation(&data)?;
+        let closing = op.as_deref() == Some("close");
         input
             .write_all(&data)
             .and_then(|_| input.write_all(b"\n"))
             .and_then(|_| input.flush())
             .map_err(|e| e.to_string())?;
-        let response = match receiver.recv_timeout(Duration::from_secs(5)) {
+        // World init/update carry replicated state that must be applied whole;
+        // large games stream hundreds of KB at join and can exceed the short
+        // interactive deadline on a busy host. Scripts/render keep 5 seconds.
+        let deadline = match op.as_deref() {
+            Some("init") | Some("update") => Duration::from_secs(WORLD_OP_WALL_SECONDS),
+            _ => Duration::from_secs(5),
+        };
+        let response = match receiver.recv_timeout(deadline) {
             Ok(result) => result?,
             Err(_) => {
                 emit(
